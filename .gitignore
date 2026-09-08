@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Raw data (contains personal info - NEVER push to public repo)
+raw_data/

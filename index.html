@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="教學追蹤">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="./style.css">
+  <title>教學進度追蹤</title>
+</head>
+<body>
+
+  <!-- ====== TOAST ====== -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- ====== SETUP SCREEN ====== -->
+  <div id="setup-screen">
+    <div class="setup-card">
+      <h1><span>📚</span> 教學進度追蹤</h1>
+      <p class="subtitle">粵華中學 · 物理科 · 2026-2027 學年</p>
+
+      <div class="form-group">
+        <label>GitHub Personal Access Token</label>
+        <input type="password" id="setup-token" placeholder="ghp_xxxxxxxxxxxx">
+        <div class="hint">
+          需要 <code>gist</code> 權限。
+          <a href="https://github.com/settings/tokens/new?scopes=gist&description=Teaching+Progress+Tracker" target="_blank">點此建立 Token ↗</a>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>課程設定 Gist ID（選填）</label>
+        <input type="text" id="setup-gist-id" placeholder="首次使用可留空，系統自動建立">
+        <div class="hint">如已建立包含 plan.json 的 Secret Gist，可貼上 ID</div>
+      </div>
+
+      <button class="btn btn-primary btn-lg btn-block" id="btn-setup">
+        開始使用
+      </button>
+
+      <div style="margin-top:20px;padding:16px;background:var(--gray-50);border-radius:8px;font-size:13px;color:var(--gray-500);line-height:1.7">
+        <strong>快速上手：</strong>
+        <ol style="margin:8px 0 0 18px">
+          <li>點上方連結建立 Token（僅需 <code>gist</code> 權限）</li>
+          <li>複製 Token 貼到上方欄位</li>
+          <li>點「開始使用」— 首次會自動建立 Gist</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== MAIN APP ====== -->
+  <div id="app-screen">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo"><span>📚</span>教學追蹤</div>
+      <div class="header-right">
+        <span id="header-date" class="date-display"></span>
+      </div>
+    </header>
+
+    <div class="app-body">
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar-classes"></aside>
+
+      <!-- Main -->
+      <main class="main-content">
+        <!-- Nav Tabs -->
+        <nav class="nav-tabs">
+          <button class="nav-tab" data-view="today">今日課堂</button>
+          <button class="nav-tab" data-view="week">本週課表</button>
+          <button class="nav-tab" data-view="compare">進度對比</button>
+          <button class="nav-tab" data-view="calendar">行事曆</button>
+          <button class="nav-tab" data-view="settings">⚙ 設定</button>
+        </nav>
+
+        <!-- ===== VIEW: TODAY ===== -->
+        <section id="view-today" class="view-panel">
+          <div class="stats-bar">
+            <div class="stat-card">
+              <div class="stat-icon">✅</div>
+              <div class="stat-number" id="stat-total-done">0</div>
+              <div class="stat-desc">累計完成</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">⚠️</div>
+              <div class="stat-number" id="stat-overdue" style="color:var(--danger)">0</div>
+              <div class="stat-desc">逾期未完</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon">📅</div>
+              <div class="stat-number" id="stat-today">0/0</div>
+              <div class="stat-desc">今日進度</div>
+            </div>
+          </div>
+          <div id="today-content"></div>
+        </section>
+
+        <!-- ===== VIEW: WEEK ===== -->
+        <section id="view-week" class="view-panel" style="display:none">
+          <div id="week-content"></div>
+        </section>
+
+        <!-- ===== VIEW: COMPARE ===== -->
+        <section id="view-compare" class="view-panel" style="display:none">
+          <div id="compare-content"></div>
+        </section>
+
+        <!-- ===== VIEW: CALENDAR ===== -->
+        <section id="view-calendar" class="view-panel" style="display:none">
+          <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="font-size:14px;font-weight:500">班級：</label>
+              <select id="cal-class-select" style="padding:8px 12px;border:1px solid var(--gray-300);border-radius:8px;font-size:14px"></select>
+            </div>
+          </div>
+          <div id="calendar-content"></div>
+        </section>
+
+        <!-- ===== VIEW: SETTINGS ===== -->
+        <section id="view-settings" class="view-panel" style="display:none">
+          <div id="settings-content"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ====== MODAL ====== -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title"></h2>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
