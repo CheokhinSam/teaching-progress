@@ -940,7 +940,7 @@
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.done ? 'overdue' : 'pending');
         const color = CLASS_COLORS[l.class] || '#64748b';
-        html += `<div class="cal-lesson ${statusCls}" style="border-left-color:${color}" data-id="${l.id}" onclick="window.TP.openLessonModal('${l.id}')">`;
+        html += `<div class="cal-lesson ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
         html += `<span class="cal-lesson-class">${l.class}</span>`;
         html += `${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}`;
         html += `</div>`;
@@ -958,6 +958,11 @@
 
     html += '</div>';
     container.innerHTML = html;
+
+    // Bind click events on calendar lessons
+    container.querySelectorAll('.cal-lesson').forEach(el => {
+      el.addEventListener('click', () => openLessonModal(el.dataset.id));
+    });
   }
 
   function getHolidayName(dateStr) {
