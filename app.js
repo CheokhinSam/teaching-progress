@@ -496,10 +496,14 @@
   }
 
   function selectClass(className) {
-    state.selectedClass = className;
-    lsSet(LS_KEYS.selectedClass, className);
+    if (state.selectedClass === className) {
+      state.selectedClass = null;
+    } else {
+      state.selectedClass = className;
+    }
+    lsSet(LS_KEYS.selectedClass, state.selectedClass);
     document.querySelectorAll('.class-item').forEach(el =>
-      el.classList.toggle('active', el.dataset.class === className)
+      el.classList.toggle('active', el.dataset.class === state.selectedClass)
     );
     renderCurrentView();
   }
@@ -533,6 +537,11 @@
     if (!el || !state.plan) return;
     const classes = Object.keys(state.plan.schedule);
     let html = '';
+    if (state.selectedClass) {
+      html += `<div class="class-item" onclick="window.TP.selectClass('${state.selectedClass}')" style="color:var(--primary);font-size:13px;justify-content:center;border-bottom:1px solid var(--gray-200);margin-bottom:4px;padding-bottom:12px">
+        ✕ 顯示全部班級
+      </div>`;
+    }
     let currentLevel = '';
     for (const cls of classes) {
       const info = state.plan.schedule[cls];
@@ -579,7 +588,8 @@
 
     // Lessons for the viewed date
     const dayLessons = [];
-    for (const lessons of Object.values(state.lessons)) {
+    for (const [cls, lessons] of Object.entries(state.lessons)) {
+      if (state.selectedClass && cls !== state.selectedClass) continue;
       for (const l of lessons) {
         if (l.date === viewDateStr) dayLessons.push(l);
       }
@@ -621,7 +631,8 @@
     if (label) label.textContent = `${fmtDisplay(weekStart)} — ${fmtDisplay(weekEnd)}`;
 
     const weekLessons = [];
-    for (const lessons of Object.values(state.lessons)) {
+    for (const [cls, lessons] of Object.entries(state.lessons)) {
+      if (state.selectedClass && cls !== state.selectedClass) continue;
       for (const l of lessons) {
         const ld = parseDate(l.date);
         if (ld >= weekStart && ld <= weekEnd) weekLessons.push(l);
