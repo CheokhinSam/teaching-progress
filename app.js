@@ -182,11 +182,12 @@
     }
 
     const periodsPerWeek = state.plan.schedule[className]?.periods_per_week || 2;
-    const result = [];
+    const hasWeeks = semData.chapters.some(ch => ch.weeks);
+    const base = [];
 
     for (const ch of semData.chapters) {
       if (ch.extra) {
-        result.push({ label: ch.extra, chapter: '', section: '' });
+        base.push({ label: ch.extra, chapter: '', section: '' });
         continue;
       }
 
@@ -204,21 +205,38 @@
             ? lessonCount - lessonsPerSection * (ch.sections.length - 1)
             : lessonsPerSection;
           for (let j = 0; j < count; j++) {
-            result.push({ label: `${ch.topic} — ${sec}`, chapter: ch.topic, section: sec });
+            base.push({ label: `${ch.topic} — ${sec}`, chapter: ch.topic, section: sec });
           }
         }
       } else {
         for (let j = 0; j < lessonCount; j++) {
-          result.push({ label: `第${ch.ch}章 ${ch.topic}`, chapter: ch.topic, section: '' });
+          base.push({ label: `第${ch.ch}章 ${ch.topic}`, chapter: ch.topic, section: '' });
         }
       }
     }
     if (semData.extra) {
       for (const e of semData.extra) {
-        result.push({ label: e, chapter: '', section: '' });
+        base.push({ label: e, chapter: '', section: '' });
       }
     }
-    return result.length > 0 ? result : [{ label: '(待補)', chapter: '', section: '' }];
+
+    if (base.length === 0) return [{ label: '(待補)', chapter: '', section: '' }];
+
+    if (!hasWeeks) {
+      const totalLessons = semester === 'semester1'
+        ? (state.plan.schedule[className]?.semester1_lessons || 30)
+        : (state.plan.schedule[className]?.semester2_lessons || 33);
+      const result = [];
+      while (result.length < totalLessons) {
+        for (const item of base) {
+          if (result.length >= totalLessons) break;
+          result.push(item);
+        }
+      }
+      return result;
+    }
+
+    return base;
   }
 
   // ============ DATA: LESSON SLOT GENERATION ============
