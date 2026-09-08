@@ -115,9 +115,14 @@
         const [startStr, endPart] = raw.split('~');
         const start = parseDate(startStr.trim());
         const endParts = endPart.trim().split('-');
-        const end = endParts.length === 3
-          ? parseDate(endPart.trim())
-          : parseDate(`${start.getFullYear()}-${endPart.trim()}`);
+        let end;
+        if (endParts.length === 3) {
+          end = parseDate(endPart.trim());
+        } else if (endParts.length === 2) {
+          end = parseDate(`${start.getFullYear()}-${endPart.trim()}`);
+        } else {
+          end = parseDate(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${endPart.trim().padStart(2, '0')}`);
+        }
         for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
           set.add(fmtDate(d));
         }
@@ -138,7 +143,17 @@
     for (const t of allTests) {
       if (t.period && t.period.includes('~')) {
         const [s, e] = t.period.split('~');
-        ranges.push({ start: parseDate(s.trim()), end: parseDate(e.trim()), event: t.event });
+        const start = parseDate(s.trim());
+        const endParts = e.trim().split('-');
+        let end;
+        if (endParts.length === 3) {
+          end = parseDate(e.trim());
+        } else if (endParts.length === 2) {
+          end = parseDate(`${start.getFullYear()}-${e.trim()}`);
+        } else {
+          end = parseDate(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${e.trim().padStart(2, '0')}`);
+        }
+        ranges.push({ start, end, event: t.event });
       }
     }
     return ranges;
@@ -991,9 +1006,14 @@
         const [startStr, endPart] = raw.split('~');
         const start = parseDate(startStr.trim());
         const endParts = endPart.trim().split('-');
-        const end = endParts.length === 3
-          ? parseDate(endPart.trim())
-          : parseDate(`${start.getFullYear()}-${endPart.trim()}`);
+        let end;
+        if (endParts.length === 3) {
+          end = parseDate(endPart.trim());
+        } else if (endParts.length === 2) {
+          end = parseDate(`${start.getFullYear()}-${endPart.trim()}`);
+        } else {
+          end = parseDate(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${endPart.trim().padStart(2, '0')}`);
+        }
         const d = parseDate(dateStr);
         if (d >= start && d <= end) return h.event;
       } else {
