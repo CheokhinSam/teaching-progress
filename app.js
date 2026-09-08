@@ -34,7 +34,17 @@
     expandedLessons: new Set(),
     isLoading: false,
     isDirty: false,
-    saveTimer: null
+    saveTimer: null,
+    calendarMonth: null,  // { year, month } for calendar view
+    weekOffset: 0,        // 0 = current week, -1 = last week, 1 = next week
+    dayOffset: 0          // 0 = today, -1 = yesterday, 1 = tomorrow
+  };
+
+  // Class colors for calendar
+  const CLASS_COLORS = {
+    '初二甲': '#3b82f6', '初二乙': '#8b5cf6',
+    '初三甲': '#10b981', '初三乙': '#14b8a6',
+    '高一乙': '#f59e0b', '高二甲': '#ef4444'
   };
 
   // ============ DOM REFS ============
@@ -76,11 +86,6 @@
   }
   function isSameDay(a, b) {
     return fmtDate(a) === fmtDate(b);
-  }
-  function weekNum(d) {
-    const start = new Date(d.getFullYear(), 0, 1);
-    const diff = (d - start + ((start.getTimezoneOffset() - d.getTimezoneOffset()) * 60000)) / 86400000;
-    return Math.ceil((diff + start.getDay() + 1) / 7);
   }
 
   function debounce(fn, ms) {
@@ -479,39 +484,7 @@
     return { total, done, overdue, pct, current, expectedDone, diff, status };
   }
 
-  function getTodayLessons() {
-    const td = fmtDate(today());
-    const result = [];
-    for (const lessons of Object.values(state.lessons)) {
-      for (const l of lessons) {
-        if (l.date === td) result.push(l);
-      }
-    }
-    return result.sort((a, b) => a.time.localeCompare(b.time));
-  }
 
-  function getWeekLessons() {
-    const td = today();
-    const dow = td.getDay();
-    const weekStart = addDays(td, -((dow + 6) % 7));
-    const weekEnd = addDays(weekStart, 6);
-    const result = [];
-    for (const lessons of Object.values(state.lessons)) {
-      for (const l of lessons) {
-        const ld = parseDate(l.date);
-        if (ld >= weekStart && ld <= weekEnd) result.push(l);
-      }
-    }
-    return result.sort((a, b) => {
-      const dc = a.date.localeCompare(b.date);
-      return dc !== 0 ? dc : a.time.localeCompare(b.time);
-    });
-  }
-
-  function getCurrentSemester() {
-    const m = today().getMonth();
-    return m >= 7 || m === 0 ? 'semester1' : 'semester2';
-  }
 
   // ============ UI: NAVIGATION ============
   function switchView(view) {
@@ -585,45 +558,81 @@
   // ============ UI: TODAY VIEW ============
   function renderToday() {
     const container = $('today-content');
+    const label = $('today-label');
     if (!container) return;
-    const todayLessons = getTodayLessons();
-    const td = today();
 
-    // Stats
+    const td = today();
+    const viewDate = addDays(td, state.dayOffset);
+    const viewDateStr = fmtDate(viewDate);
+
+    if (label) label.textContent = fmtFull(viewDate);
+
+    // Stats (always based on real today)
     const allLessons = Object.entries(state.lessons);
-    let totalDone = 0, totalOverdue = 0, todayDone = 0;
+    let totalDone = 0, totalOverdue = 0;
     for (const [_, lessons] of allLessons) {
       for (const l of lessons) {
         if (l.done) totalDone++;
         if (!l.done && parseDate(l.date) < td) totalOverdue++;
       }
     }
-    todayDone = todayLessons.filter(l => l.done).length;
+
+    // Lessons for the viewed date
+    const dayLessons = [];
+    for (const lessons of Object.values(state.lessons)) {
+      for (const l of lessons) {
+        if (l.date === viewDateStr) dayLessons.push(l);
+      }
+    }
+    dayLessons.sort((a, b) => a.time.localeCompare(b.time));
+    const dayDone = dayLessons.filter(l => l.done).length;
 
     $('stat-total-done').textContent = totalDone;
     $('stat-overdue').textContent = totalOverdue;
-    $('stat-today').textContent = `${todayDone}/${todayLessons.length}`;
+    $('stat-today').textContent = `${dayDone}/${dayLessons.length}`;
 
-    if (todayLessons.length === 0) {
+    if (dayLessons.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
           <div class="icon">📅</div>
-          <h3>今天沒有課堂</h3>
+          <h3>${state.dayOffset === 0 ? '今天沒有課堂' : '當天沒有課堂'}</h3>
           <p>切換到「本週課表」查看本週安排</p>
         </div>`;
       return;
     }
 
-    container.innerHTML = todayLessons.map(l => renderLessonCard(l, true)).join('');
+    container.innerHTML = dayLessons.map(l => renderLessonCard(l, true)).join('');
     bindLessonCardEvents(container);
   }
 
   // ============ UI: WEEK VIEW ============
   function renderWeek() {
     const container = $('week-content');
+    const label = $('week-label');
     if (!container) return;
-    const weekLessons = getWeekLessons();
-    const td = fmtDate(today());
+
+    const td = today();
+    const offsetDays = state.weekOffset * 7;
+    const viewDate = addDays(td, offsetDays);
+    const dow = viewDate.getDay();
+    const weekStart = addDays(viewDate, -((dow + 6) % 7));
+    const weekEnd = addDays(weekStart, 6);
+
+    if (label) label.textContent = `${fmtDisplay(weekStart)} — ${fmtDisplay(weekEnd)}`;
+
+    const weekLessons = [];
+    for (const lessons of Object.values(state.lessons)) {
+      for (const l of lessons) {
+        const ld = parseDate(l.date);
+        if (ld >= weekStart && ld <= weekEnd) weekLessons.push(l);
+      }
+    }
+    weekLessons.sort((a, b) => {
+      const dc = a.date.localeCompare(b.date);
+      return dc !== 0 ? dc : a.time.localeCompare(b.time);
+    });
+
+    const todayStr = fmtDate(td);
 
     if (weekLessons.length === 0) {
       container.innerHTML = `
@@ -642,7 +651,7 @@
 
     let html = '';
     for (const [date, lessons] of Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]))) {
-      const isToday = date === td;
+      const isToday = date === todayStr;
       html += `<div style="margin-bottom:24px">`;
       html += `<div style="font-size:14px;font-weight:600;color:${isToday ? 'var(--primary)' : 'var(--gray-600)'};margin-bottom:8px;padding-left:4px">
         ${fmtDisplay(date)}${isToday ? ' (今天)' : ''}
@@ -798,67 +807,167 @@
   }
 
   // ============ UI: CALENDAR VIEW ============
+  function initCalendarMonth() {
+    const td = today();
+    state.calendarMonth = { year: td.getFullYear(), month: td.getMonth() };
+  }
+
+  function calPrevMonth() {
+    if (!state.calendarMonth) initCalendarMonth();
+    state.calendarMonth.month--;
+    if (state.calendarMonth.month < 0) { state.calendarMonth.month = 11; state.calendarMonth.year--; }
+    renderCalendar();
+  }
+
+  function calNextMonth() {
+    if (!state.calendarMonth) initCalendarMonth();
+    state.calendarMonth.month++;
+    if (state.calendarMonth.month > 11) { state.calendarMonth.month = 0; state.calendarMonth.year++; }
+    renderCalendar();
+  }
+
+  function navDay(offset) {
+    state.dayOffset = offset === 0 ? 0 : state.dayOffset + offset;
+    renderToday();
+  }
+
+  function navWeek(offset) {
+    state.weekOffset = offset === 0 ? 0 : state.weekOffset + offset;
+    renderWeek();
+  }
+
   function renderCalendar() {
-    const sel = $('cal-class-select');
     const container = $('calendar-content');
-    if (!sel || !container) return;
+    const label = $('cal-month-label');
+    const legend = $('cal-legend');
+    if (!container) return;
 
-    // Populate class select
-    const classes = Object.keys(state.lessons);
-    sel.innerHTML = classes.map(c => `<option value="${c}" ${c === state.selectedClass ? 'selected' : ''}>${c}</option>`).join('');
+    if (!state.calendarMonth) initCalendarMonth();
+    const { year, month } = state.calendarMonth;
+    const MONTH_NAMES = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+    if (label) label.textContent = `${year}年 ${MONTH_NAMES[month]}`;
 
-    const cls = sel.value;
-    if (!cls) { container.innerHTML = '<div class="empty-state"><p>選擇班級</p></div>'; return; }
-
-    const lessons = state.lessons[cls] || [];
-    const sem = getCurrentSemester();
-    const semLessons = lessons.filter(l => l.semester === sem);
-    const td = fmtDate(today());
-
-    if (semLessons.length === 0) {
-      container.innerHTML = '<div class="empty-state"><p>此學期暫無課程</p></div>';
-      return;
+    // Legend
+    if (legend) {
+      const classes = Object.keys(state.lessons);
+      legend.innerHTML = classes.map(cls => {
+        const color = CLASS_COLORS[cls] || '#64748b';
+        return `<span class="cal-legend-item"><span class="cal-legend-dot" style="background:${color}"></span>${cls}</span>`;
+      }).join('');
     }
 
-    // Group by week
-    const weeks = {};
-    for (const l of semLessons) {
-      const d = parseDate(l.date);
-      const wKey = `${d.getFullYear()}-W${String(weekNum(d)).padStart(2, '0')}`;
-      if (!weeks[wKey]) weeks[wKey] = [];
-      weeks[wKey].push(l);
-    }
+    // Build holiday set
+    const holidaySet = buildHolidaySet();
 
-    let html = '';
-    for (const [wKey, wLessons] of Object.entries(weeks)) {
-      html += `<div style="margin-bottom:16px">`;
-      html += `<div style="font-size:12px;font-weight:600;color:var(--gray-400);margin-bottom:6px">${wKey}</div>`;
-      html += `<div class="calendar-grid">`;
+    // Get first day of month and calculate grid
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
+    const daysInMonth = lastDay.getDate();
 
-      const weekStart = parseDate(wLessons[0].date);
-      const startDow = (dayOfWeek(weekStart) + 6) % 7; // Mon=0
-      for (let i = 0; i < 5; i++) {
-        const d = addDays(weekStart, i - startDow);
-        const dateStr = fmtDate(d);
-        const isToday = dateStr === td;
-        const dayLessons = wLessons.filter(l => l.date === dateStr);
-        html += `<div class="cal-day ${isToday ? 'today' : ''}">`;
-        html += `<div class="cal-day-header">
-          <span>${d.getMonth() + 1}/${d.getDate()}(${DAY_NAMES[d.getDay()]})</span>
-        </div>`;
-        if (dayLessons.length > 0) {
-          html += dayLessons.map(l => {
-            const cls2 = l.done ? 'done' : (parseDate(l.date) < today() && !l.done ? 'overdue' : 'pending');
-            return `<div class="cal-lesson ${cls2}" title="${escHtml(l.topic)}" data-id="${l.id}">
-              ${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 15))}${l.topic.length > 15 ? '...' : ''}
-            </div>`;
-          }).join('');
+    // Collect all lessons for this month
+    const allLessons = [];
+    for (const [_cls, lessons] of Object.entries(state.lessons)) {
+      for (const l of lessons) {
+        const d = parseDate(l.date);
+        if (d.getFullYear() === year && d.getMonth() === month) {
+          allLessons.push(l);
         }
+      }
+    }
+
+    // Group lessons by date
+    const lessonsByDate = {};
+    for (const l of allLessons) {
+      if (!lessonsByDate[l.date]) lessonsByDate[l.date] = [];
+      lessonsByDate[l.date].push(l);
+    }
+
+    const td = fmtDate(today());
+    let html = '<div class="cal-month-grid">';
+
+    // Day headers
+    const DAY_HEADERS = ['週一', '週二', '週三', '週四', '週五'];
+    for (const dh of DAY_HEADERS) {
+      html += `<div style="font-size:12px;font-weight:600;color:var(--gray-400);text-align:center;padding:8px 0">${dh}</div>`;
+    }
+
+    // Fill previous month days
+    const prevMonthLast = new Date(year, month, 0);
+    for (let i = startDow - 1; i >= 0; i--) {
+      const d = prevMonthLast.getDate() - i;
+      html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d}</span></div></div>`;
+    }
+
+    // Current month days
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(year, month, d);
+      const dow = dateObj.getDay();
+      if (dow === 0 || dow === 6) continue; // Skip weekends
+
+      const dateStr = fmtDate(dateObj);
+      const isToday = dateStr === td;
+      const isHol = holidaySet.has(dateStr);
+      const dayLessons = lessonsByDate[dateStr] || [];
+
+      let cls = 'cal-day';
+      if (isToday) cls += ' today';
+      if (isHol) cls += ' holiday';
+
+      html += `<div class="${cls}">`;
+      html += `<div class="cal-day-header">`;
+      html += `<span class="cal-day-num">${d}</span>`;
+      if (isHol) {
+        const hol = getHolidayName(dateStr);
+        html += `<span class="cal-holiday-tag">${hol || '假期'}</span>`;
+      }
+      html += `</div>`;
+
+      for (const l of dayLessons) {
+        const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.done ? 'overdue' : 'pending');
+        const color = CLASS_COLORS[l.class] || '#64748b';
+        html += `<div class="cal-lesson ${statusCls}" style="border-left-color:${color}" data-id="${l.id}" onclick="window.TP.openLessonModal('${l.id}')">`;
+        html += `<span class="cal-lesson-class">${l.class}</span>`;
+        html += `${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}`;
         html += `</div>`;
       }
-      html += `</div></div>`;
+
+      html += `</div>`;
     }
+
+    // Fill next month days
+    const totalCells = startDow + daysInMonth;
+    const remaining = (5 - (totalCells % 5)) % 5;
+    for (let d = 1; d <= remaining; d++) {
+      html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d}</span></div></div>`;
+    }
+
+    html += '</div>';
     container.innerHTML = html;
+  }
+
+  function getHolidayName(dateStr) {
+    if (!state.plan?.school_calendar) return '';
+    const allHolidays = [
+      ...(state.plan.school_calendar.semester1_holidays || []),
+      ...(state.plan.school_calendar.semester2_holidays || [])
+    ];
+    for (const h of allHolidays) {
+      const raw = h.date;
+      if (raw.includes('~')) {
+        const [startStr, endPart] = raw.split('~');
+        const start = parseDate(startStr.trim());
+        const endParts = endPart.trim().split('-');
+        const end = endParts.length === 3
+          ? parseDate(endPart.trim())
+          : parseDate(`${start.getFullYear()}-${endPart.trim()}`);
+        const d = parseDate(dateStr);
+        if (d >= start && d <= end) return h.event;
+      } else {
+        if (fmtDate(parseDate(raw)) === dateStr) return h.event;
+      }
+    }
+    return '';
   }
 
   // ============ UI: SETTINGS VIEW ============
@@ -1087,6 +1196,70 @@
     }
 
     state.lessons[cls] = lessons;
+  }
+
+  function openLessonModal(id) {
+    const l = findLesson(id);
+    if (!l) return;
+    const overlay = $('modal-overlay');
+    const body = $('modal-body');
+    const title = $('modal-title');
+    const hwData = typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
+
+    title.textContent = `${l.class} 第${l.lessonNum}節`;
+    body.innerHTML = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <span class="badge ${l.done ? 'badge-ok' : 'badge-behind'}">${l.done ? '已完成' : '未完成'}</span>
+        ${l.postponed ? '<span class="badge" style="background:#fef3c7;color:#92400e">已延期</span>' : ''}
+      </div>
+      <div style="font-size:14px;color:var(--gray-600);margin-bottom:12px">
+        <div>📅 ${fmtDisplay(l.date)} ${l.dayOfWeek} ${l.time}</div>
+        <div style="margin-top:4px">📖 ${escHtml(l.topic)}</div>
+      </div>
+      <div class="form-group">
+        <label>教學主題（可修改）</label>
+        <input type="text" id="modal-topic" value="${escHtml(l.topic)}" placeholder="輸入教學主題">
+      </div>
+      <div class="form-group">
+        <label>課後備註</label>
+        <textarea id="modal-note" rows="3" placeholder="課後備註...">${escHtml(l.note || '')}</textarea>
+      </div>
+      <div class="form-group">
+        <label>作業主題</label>
+        <input type="text" id="modal-hw-topic" value="${escHtml(hwData.topic || '')}" placeholder="例: 課本 P.32 練習">
+      </div>
+      <div class="form-group">
+        <label>作業繳交日期</label>
+        <input type="date" id="modal-hw-due" value="${hwData.due || ''}">
+      </div>`;
+
+    $('modal-footer').innerHTML = `
+      <button class="btn ${l.done ? 'btn-outline' : 'btn-success'}" id="modal-toggle-done">${l.done ? '取消完成' : '✓ 標記完成'}</button>
+      <button class="btn btn-outline" id="modal-cancel">取消</button>
+      <button class="btn btn-primary" id="modal-save">儲存</button>`;
+    overlay.classList.add('open');
+
+    $('modal-toggle-done').onclick = () => {
+      l.done = !l.done;
+      markDirty();
+      overlay.classList.remove('open');
+      renderAll();
+      toast(l.done ? '✅ 已完成' : '已取消完成', l.done ? 'success' : 'info');
+    };
+
+    $('modal-save').onclick = () => {
+      l.topic = $('modal-topic').value.trim() || l.topic;
+      l.note = $('modal-note').value.trim();
+      const hwTopic = $('modal-hw-topic').value.trim();
+      const hwDue = $('modal-hw-due').value;
+      l.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
+      markDirty();
+      overlay.classList.remove('open');
+      renderAll();
+      toast('已儲存', 'success');
+    };
+
+    $('modal-cancel').onclick = () => overlay.classList.remove('open');
   }
 
   function openHwModal(id) {
@@ -1340,8 +1513,9 @@
       tab.addEventListener('click', () => switchView(tab.dataset.view));
     });
 
-    // Bind calendar class select
-    $('cal-class-select')?.addEventListener('change', renderCalendar);
+    // Bind calendar navigation
+    $('cal-prev')?.addEventListener('click', calPrevMonth);
+    $('cal-next')?.addEventListener('click', calNextMonth);
 
     // Bind modal close
     $('modal-close')?.addEventListener('click', () => $('modal-overlay')?.classList.remove('open'));
@@ -1372,7 +1546,7 @@
   }
 
   // Expose for inline onclick handlers
-  window.TP = { selectClass, switchView };
+  window.TP = { selectClass, switchView, openLessonModal, navDay, navWeek };
 
   // Start
   if (document.readyState === 'loading') {
