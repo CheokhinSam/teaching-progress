@@ -863,7 +863,9 @@
       const classes = Object.keys(state.lessons);
       legend.innerHTML = classes.map(cls => {
         const color = CLASS_COLORS[cls] || '#64748b';
-        return `<span class="cal-legend-item"><span class="cal-legend-dot" style="background:${color}"></span>${cls}</span>`;
+        const isActive = !state.selectedClass || state.selectedClass === cls;
+        const opacity = isActive ? '1' : '0.3';
+        return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" onclick="window.TP.selectClass('${cls}')"><span class="cal-legend-dot" style="background:${color}"></span>${cls}</span>`;
       }).join('');
     }
 
@@ -878,7 +880,8 @@
 
     // Collect all lessons for this month
     const allLessons = [];
-    for (const [_cls, lessons] of Object.entries(state.lessons)) {
+    for (const [cls, lessons] of Object.entries(state.lessons)) {
+      if (state.selectedClass && cls !== state.selectedClass) continue;
       for (const l of lessons) {
         const d = parseDate(l.date);
         if (d.getFullYear() === year && d.getMonth() === month) {
