@@ -96,11 +96,23 @@
               <div class="stat-desc">今日進度</div>
             </div>
           </div>
+          <div class="week-nav">
+            <button class="btn btn-outline btn-sm" id="today-prev" onclick="window.TP.navDay(-1)">◀ 前一天</button>
+            <span id="today-label" style="font-weight:600;font-size:15px"></span>
+            <button class="btn btn-outline btn-sm" id="today-next" onclick="window.TP.navDay(1)">後一天 ▶</button>
+            <button class="btn btn-primary btn-sm" id="today-today" onclick="window.TP.navDay(0)" style="margin-left:8px">今天</button>
+          </div>
           <div id="today-content"></div>
         </section>
 
         <!-- ===== VIEW: WEEK ===== -->
         <section id="view-week" class="view-panel hidden">
+          <div class="week-nav">
+            <button class="btn btn-outline btn-sm" id="week-prev" onclick="window.TP.navWeek(-1)">◀ 上週</button>
+            <span id="week-label" style="font-weight:600;font-size:15px"></span>
+            <button class="btn btn-outline btn-sm" id="week-next" onclick="window.TP.navWeek(1)">下週 ▶</button>
+            <button class="btn btn-primary btn-sm" id="week-this" onclick="window.TP.navWeek(0)" style="margin-left:8px">本週</button>
+          </div>
           <div id="week-content"></div>
         </section>
 
@@ -111,12 +123,12 @@
 
         <!-- ===== VIEW: CALENDAR ===== -->
         <section id="view-calendar" class="view-panel hidden">
-          <div class="card" style="margin-bottom:16px">
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              <label style="font-size:14px;font-weight:500">班級：</label>
-              <select id="cal-class-select" style="padding:8px 12px;border:1px solid var(--gray-300);border-radius:8px;font-size:14px"></select>
-            </div>
+          <div class="cal-toolbar">
+            <button class="btn btn-outline" id="cal-prev">◀ 上月</button>
+            <h3 id="cal-month-label" style="font-size:18px;font-weight:700"></h3>
+            <button class="btn btn-outline" id="cal-next">下月 ▶</button>
           </div>
+          <div class="cal-legend" id="cal-legend"></div>
           <div id="calendar-content"></div>
         </section>
 
