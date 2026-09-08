@@ -687,6 +687,9 @@ textarea { resize: vertical; min-height: 80px; }
 .empty-state h3 { font-size: 18px; color: var(--gray-600); margin-bottom: 8px; }
 .empty-state p { font-size: 14px; }
 
+/* ========= VISIBILITY ========= */
+.hidden { display: none !important; }
+
 /* ========= LOADING ========= */
 .loading {
   text-align: center;
