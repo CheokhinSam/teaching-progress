@@ -165,18 +165,37 @@
     if (!semData?.chapters) {
       return [{ label: '(待補)', chapter: '', section: '' }];
     }
+
+    const periodsPerWeek = state.plan.schedule[className]?.periods_per_week || 2;
     const result = [];
+
     for (const ch of semData.chapters) {
       if (ch.extra) {
         result.push({ label: ch.extra, chapter: '', section: '' });
         continue;
       }
+
+      let lessonCount = 1;
+      if (ch.weeks) {
+        const [wStart, wEnd] = ch.weeks.split('-').map(Number);
+        lessonCount = (wEnd - wStart) * periodsPerWeek;
+      }
+
       if (ch.sections && ch.sections.length > 0) {
-        for (const sec of ch.sections) {
-          result.push({ label: `${ch.topic} — ${sec}`, chapter: ch.topic, section: sec });
+        const lessonsPerSection = Math.max(1, Math.floor(lessonCount / ch.sections.length));
+        for (let i = 0; i < ch.sections.length; i++) {
+          const sec = ch.sections[i];
+          const count = i === ch.sections.length - 1
+            ? lessonCount - lessonsPerSection * (ch.sections.length - 1)
+            : lessonsPerSection;
+          for (let j = 0; j < count; j++) {
+            result.push({ label: `${ch.topic} — ${sec}`, chapter: ch.topic, section: sec });
+          }
         }
       } else {
-        result.push({ label: `第${ch.ch}章 ${ch.topic}`, chapter: ch.topic, section: '' });
+        for (let j = 0; j < lessonCount; j++) {
+          result.push({ label: `第${ch.ch}章 ${ch.topic}`, chapter: ch.topic, section: '' });
+        }
       }
     }
     if (semData.extra) {
