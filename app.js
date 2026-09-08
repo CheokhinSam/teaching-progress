@@ -1218,7 +1218,7 @@
     const overlay = $('modal-overlay');
     const body = $('modal-body');
     const title = $('modal-title');
-    const hwData = typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
+    const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
 
     title.textContent = `${l.class} 第${l.lessonNum}節`;
     body.innerHTML = `
@@ -1283,7 +1283,7 @@
     const body = $('modal-body');
     const title = $('modal-title');
     title.textContent = `${l.class} 第${l.lessonNum}節 — 作業`;
-    const hwData = typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
+    const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
     body.innerHTML = `
       <div class="form-group">
         <label>作業主題</label>
