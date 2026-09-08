@@ -668,6 +668,8 @@
     const stats = getClassStats(l.class);
     const statusBadge = stats.status === 'ok' ? '' : `<span class="badge ${stats.status === 'behind' ? 'badge-behind' : 'badge-ahead'}" style="font-size:11px;margin-left:8px">${stats.status === 'behind' ? '落後' : '領先'}</span>`;
 
+    const shiftCount = state.progress?.classes?.[l.class]?.[l.semester]?.shift_count || 0;
+
     return `
       <div class="lesson-card ${statusClass}" data-id="${l.id}" data-class="${l.class}">
         <div class="lesson-header">
@@ -703,7 +705,7 @@
         ${isExpanded ? `
           <div class="lesson-actions">
             <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}> ${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
-            <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">⏩ 順延</button>
+            <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
             <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
           </div>` : ''}
       </div>`;
@@ -990,22 +992,26 @@
     if (!l) return;
     const cls = l.class;
     const sem = l.semester;
-    const lessons = state.lessons[cls].filter(x => x.semester === sem);
-    const idx = lessons.indexOf(l);
-    if (idx < 0) return;
 
-    // Shift: mark this and all subsequent as needing re-schedule
-    // Increment shift count
     if (!state.progress.classes[cls]) state.progress.classes[cls] = {};
     if (!state.progress.classes[cls][sem]) state.progress.classes[cls][sem] = {};
     const currentShift = state.progress.classes[cls][sem].shift_count || 0;
-    state.progress.classes[cls][sem].shift_count = currentShift + 1;
 
-    // Regenerate lessons for this class
-    regenerateClassLessons(cls);
-    markDirty();
-    renderAll();
-    toast(`⏩ ${cls} 已順延一節`, 'info');
+    if (currentShift > 0) {
+      // Undo: decrement shift count
+      state.progress.classes[cls][sem].shift_count = currentShift - 1;
+      regenerateClassLessons(cls);
+      markDirty();
+      renderAll();
+      toast(`↩ ${cls} 已取消一節順延（剩餘 ${currentShift - 1} 節）`, 'success');
+    } else {
+      // Shift: increment shift count
+      state.progress.classes[cls][sem].shift_count = currentShift + 1;
+      regenerateClassLessons(cls);
+      markDirty();
+      renderAll();
+      toast(`⏩ ${cls} 已順延一節`, 'info');
+    }
   }
 
   function regenerateClassLessons(cls) {
