@@ -702,7 +702,7 @@
         ${l.hw ? `<div class="lesson-hw">📋 ${escHtml(typeof l.hw === 'string' ? l.hw : l.hw.topic || '')}</div>` : ''}
         ${isExpanded ? `
           <div class="lesson-actions">
-            <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}>⏸ 延期</button>
+            <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}> ${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
             <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">⏩ 順延</button>
             <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
           </div>` : ''}
@@ -979,10 +979,10 @@
   function postponeLesson(id) {
     const l = findLesson(id);
     if (!l || l.done) return;
-    l.postponed = true;
+    l.postponed = !l.postponed;
     markDirty();
     renderAll();
-    toast(`⏸ ${l.class} 第${l.lessonNum}節已延期`, 'warning');
+    toast(l.postponed ? `⏸ ${l.class} 第${l.lessonNum}節已延期` : `▶ ${l.class} 第${l.lessonNum}節已取消延期`, l.postponed ? 'warning' : 'success');
   }
 
   function autoShift(id) {

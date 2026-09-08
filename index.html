@@ -70,11 +70,11 @@
       <main class="main-content">
         <!-- Nav Tabs -->
         <nav class="nav-tabs">
-          <button class="nav-tab" data-view="today">今日課堂</button>
-          <button class="nav-tab" data-view="week">本週課表</button>
-          <button class="nav-tab" data-view="compare">進度對比</button>
-          <button class="nav-tab" data-view="calendar">行事曆</button>
-          <button class="nav-tab" data-view="settings">⚙ 設定</button>
+          <button class="nav-tab active" data-view="today" onclick="window.TP.switchView('today')">今日課堂</button>
+          <button class="nav-tab" data-view="week" onclick="window.TP.switchView('week')">本週課表</button>
+          <button class="nav-tab" data-view="compare" onclick="window.TP.switchView('compare')">進度對比</button>
+          <button class="nav-tab" data-view="calendar" onclick="window.TP.switchView('calendar')">行事曆</button>
+          <button class="nav-tab" data-view="settings" onclick="window.TP.switchView('settings')">⚙ 設定</button>
         </nav>
 
         <!-- ===== VIEW: TODAY ===== -->
@@ -100,17 +100,17 @@
         </section>
 
         <!-- ===== VIEW: WEEK ===== -->
-        <section id="view-week" class="view-panel" style="display:none">
+        <section id="view-week" class="view-panel hidden">
           <div id="week-content"></div>
         </section>
 
         <!-- ===== VIEW: COMPARE ===== -->
-        <section id="view-compare" class="view-panel" style="display:none">
+        <section id="view-compare" class="view-panel hidden">
           <div id="compare-content"></div>
         </section>
 
         <!-- ===== VIEW: CALENDAR ===== -->
-        <section id="view-calendar" class="view-panel" style="display:none">
+        <section id="view-calendar" class="view-panel hidden">
           <div class="card" style="margin-bottom:16px">
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
               <label style="font-size:14px;font-weight:500">班級：</label>
@@ -121,7 +121,7 @@
         </section>
 
         <!-- ===== VIEW: SETTINGS ===== -->
-        <section id="view-settings" class="view-panel" style="display:none">
+        <section id="view-settings" class="view-panel hidden">
           <div id="settings-content"></div>
         </section>
       </main>
