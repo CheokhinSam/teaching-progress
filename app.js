@@ -192,7 +192,9 @@
       }
 
       let lessonCount = 1;
-      if (ch.weeks) {
+      if (ch.lesson_count) {
+        lessonCount = ch.lesson_count;
+      } else if (ch.weeks) {
         const [wStart, wEnd] = ch.weeks.split('-').map(Number);
         lessonCount = (wEnd - wStart) * periodsPerWeek;
       }
