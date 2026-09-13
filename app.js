@@ -1091,6 +1091,11 @@
           <input type="text" id="settings-plan-gist" value="${state.planGistId}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
           <div class="hint">包含 plan.json 的 Secret Gist ID</div>
         </div>
+        <div class="form-group">
+          <label>進度紀錄 Gist ID</label>
+          <input type="text" id="settings-progress-gist" value="${state.progressGistId}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+          <div class="hint">包含 progress.json 的 Secret Gist ID（多裝置請輸入同一個 ID）</div>
+        </div>
         <button class="btn btn-primary" id="btn-save-settings">儲存設定</button>
         <button class="btn btn-outline" id="btn-test-connection" style="margin-left:8px">測試連線</button>
       </div>
@@ -1110,7 +1115,7 @@
         <h3>多裝置同步教學</h3>
         <div style="font-size:14px;color:var(--gray-600);line-height:1.8">
           <p>1. 在每台裝置的瀏覽器開啟此 App</p>
-          <p>2. 進入「設定」頁面，輸入同一組 Token 與 Gist ID</p>
+          <p>2. 進入「設定」頁面，輸入同一組 Token、課程 Gist ID 及進度 Gist ID</p>
           <p>3. 點擊「儲存設定」後即可自動同步</p>
           <p style="margin-top:8px;color:var(--gray-400);font-size:12px">💡 建議使用同一組 Token，資料透過 GitHub Gist 即時同步</p>
         </div>
@@ -1385,6 +1390,7 @@
   async function saveSettings() {
     const token = $('settings-token')?.value.trim();
     const gistId = $('settings-plan-gist')?.value.trim();
+    const progressGistId = $('settings-progress-gist')?.value.trim();
     if (token) {
       state.token = token;
       lsSet(LS_KEYS.token, token);
@@ -1392,6 +1398,10 @@
     if (gistId) {
       state.planGistId = gistId;
       lsSet(LS_KEYS.planGistId, gistId);
+    }
+    if (progressGistId) {
+      state.progressGistId = progressGistId;
+      lsSet(LS_KEYS.progressGistId, progressGistId);
     }
     toast('設定已儲存', 'success');
   }
@@ -1492,6 +1502,12 @@
     if (gistId) {
       state.planGistId = gistId;
       lsSet(LS_KEYS.planGistId, gistId);
+    }
+
+    const progressGistId = $('setup-progress-gist-id')?.value.trim();
+    if (progressGistId) {
+      state.progressGistId = progressGistId;
+      lsSet(LS_KEYS.progressGistId, progressGistId);
     }
 
     try {
