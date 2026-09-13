@@ -759,7 +759,7 @@
             <div style="min-width:0">
               <div class="lesson-class">${l.class}${statusBadge}</div>
               <div class="lesson-meta">
-                <span>第${l.lessonNum}節</span>
+                <span>第${l.period}節</span>
                 <span>${l.dayOfWeek} ${l.time}</span>
                 ${l.postponed ? '<span style="color:var(--warning)">⏸ 已延期</span>' : ''}
               </div>
@@ -1141,7 +1141,7 @@
     l.done = !l.done;
     markDirty();
     renderAll();
-    toast(l.done ? `✅ ${l.class} 第${l.lessonNum}節已完成` : `已取消完成`, l.done ? 'success' : 'info');
+    toast(l.done ? `✅ ${l.class} 第${l.period}節已完成` : `已取消完成`, l.done ? 'success' : 'info');
   }
 
   function toggleExpand(id, forceOpen) {
@@ -1173,7 +1173,7 @@
     l.postponed = !l.postponed;
     markDirty();
     renderAll();
-    toast(l.postponed ? `⏸ ${l.class} 第${l.lessonNum}節已延期` : `▶ ${l.class} 第${l.lessonNum}節已取消延期`, l.postponed ? 'warning' : 'success');
+    toast(l.postponed ? `⏸ ${l.class} 第${l.period}節已延期` : `▶ ${l.class} 第${l.period}節已取消延期`, l.postponed ? 'warning' : 'success');
   }
 
   function autoShift(id) {
@@ -1286,7 +1286,7 @@
     const title = $('modal-title');
     const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
 
-    title.textContent = `${l.class} 第${l.lessonNum}節`;
+    title.textContent = `${l.class} 第${l.period}節`;
     body.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
         <span class="badge ${l.done ? 'badge-ok' : 'badge-behind'}">${l.done ? '已完成' : '未完成'}</span>
@@ -1348,7 +1348,7 @@
     const overlay = $('modal-overlay');
     const body = $('modal-body');
     const title = $('modal-title');
-    title.textContent = `${l.class} 第${l.lessonNum}節 — 作業`;
+    title.textContent = `${l.class} 第${l.period}節 — 作業`;
     const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
     body.innerHTML = `
       <div class="form-group">
