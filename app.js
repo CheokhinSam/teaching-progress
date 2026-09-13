@@ -595,7 +595,7 @@
     const classes = Object.keys(state.plan.schedule);
     let html = '';
     if (state.selectedClasses.size > 0) {
-      html += `<div class="class-item" onclick="window.TP.clearClasses()" style="color:var(--primary);font-size:13px;justify-content:center;border-bottom:1px solid var(--gray-200);margin-bottom:4px;padding-bottom:12px">
+      html += `<div class="class-item clear-classes-btn" style="color:var(--primary);font-size:13px;justify-content:center;border-bottom:1px solid var(--gray-200);margin-bottom:4px;padding-bottom:12px">
         ✕ 顯示全部班級
       </div>`;
     }
@@ -610,12 +610,13 @@
       const badgeClass = stats.status === 'ok' ? 'badge-ok' : stats.status === 'behind' ? 'badge-behind' : 'badge-ahead';
       const badgeText = stats.status === 'ok' ? '正常' : stats.status === 'behind' ? `落後${Math.abs(stats.diff)}` : `領先${stats.diff}`;
       html += `
-        <div class="class-item ${state.selectedClasses.has(cls) ? 'active' : ''}" data-class="${cls}">
-          <span>${cls}</span>
+        <div class="class-item ${state.selectedClasses.has(cls) ? 'active' : ''}" data-class="${escHtml(cls)}">
+          <span>${escHtml(cls)}</span>
           <span class="badge ${badgeClass}">${badgeText}</span>
         </div>`;
     }
     el.innerHTML = html;
+    el.querySelector('.clear-classes-btn')?.addEventListener('click', clearClasses);
     el.querySelectorAll('.class-item[data-class]').forEach(item => {
       item.addEventListener('click', () => selectClass(item.dataset.class));
     });
@@ -748,12 +749,12 @@
     const shiftCount = state.progress?.classes?.[l.class]?.[l.semester]?.shift_count || 0;
 
     return `
-      <div class="lesson-card ${statusClass}" data-id="${l.id}" data-class="${l.class}">
+      <div class="lesson-card ${statusClass}" data-id="${l.id}" data-class="${escHtml(l.class)}">
         <div class="lesson-header">
           <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
             <button class="check-btn ${l.done ? 'checked' : ''}" data-id="${l.id}" title="打卡">✓</button>
             <div style="min-width:0">
-              <div class="lesson-class">${l.class}${statusBadge}</div>
+              <div class="lesson-class">${escHtml(l.class)}${statusBadge}</div>
               <div class="lesson-meta">
                 <span>第${l.period}節</span>
                 <span>${l.dayOfWeek} ${l.time}</span>
@@ -839,8 +840,8 @@
       const barColor = stats.pct >= 70 ? 'var(--success)' : stats.pct >= 40 ? 'var(--warning)' : 'var(--danger)';
       const currentTopic = stats.current ? escHtml(stats.current.topic) : '—';
       html += `
-        <div class="compare-card" data-class="${cls}">
-          <div class="class-name">${cls}</div>
+        <div class="compare-card" data-class="${escHtml(cls)}">
+          <div class="class-name">${escHtml(cls)}</div>
           <div class="class-level">${state.plan.schedule[cls].level} · ${state.plan.schedule[cls].periods_per_week}堂/週</div>
           <div class="progress-bar">
             <div class="progress-bar-fill" style="width:${stats.pct}%;background:${barColor}"></div>
@@ -867,11 +868,17 @@
               <div class="stat-label">剩餘</div>
             </div>
           </div>
-          <button class="btn btn-sm btn-outline btn-block" style="margin-top:12px" onclick="window.TP.selectClass('${cls}');window.TP.switchView('today')">查看詳細</button>
+          <button class="btn btn-sm btn-outline btn-block compare-detail-btn" style="margin-top:12px" data-class="${escHtml(cls)}">查看詳細</button>
         </div>`;
     }
     html += '</div>';
     container.innerHTML = html;
+    container.querySelectorAll('.compare-detail-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectClass(btn.dataset.class);
+        switchView('today');
+      });
+    });
   }
 
   // ============ UI: CALENDAR VIEW ============
@@ -922,8 +929,11 @@
         const color = CLASS_COLORS[cls] || '#64748b';
         const isActive = state.selectedClasses.size === 0 || state.selectedClasses.has(cls);
         const opacity = isActive ? '1' : '0.3';
-        return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" onclick="window.TP.selectClass('${cls}')"><span class="cal-legend-dot" style="background:${color}"></span>${cls}</span>`;
+        return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" data-class="${escHtml(cls)}"><span class="cal-legend-dot" style="background:${color}"></span>${escHtml(cls)}</span>`;
       }).join('');
+      legend.querySelectorAll('.cal-legend-item').forEach(item => {
+        item.addEventListener('click', () => selectClass(item.dataset.class));
+      });
     }
 
     // Build holiday set
@@ -997,8 +1007,8 @@
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.done ? 'overdue' : 'pending');
         const color = CLASS_COLORS[l.class] || '#64748b';
-        html += `<div class="cal-lesson ${statusCls}" style="border-left-color:${color}" data-id="${l.id}" onclick="window.TP.openLessonModal(this.dataset.id)">`;
-        html += `<span class="cal-lesson-class">${l.class}</span>`;
+        html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
+        html += `<span class="cal-lesson-class">${escHtml(l.class)}</span>`;
         html += `${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}`;
         html += `</div>`;
       }
@@ -1015,6 +1025,9 @@
 
     html += '</div>';
     container.innerHTML = html;
+    container.querySelectorAll('.cal-lesson-clickable').forEach(el => {
+      el.addEventListener('click', () => openLessonModal(el.dataset.id));
+    });
   }
 
   function getHolidayName(dateStr) {
@@ -1609,6 +1622,16 @@
     $('cal-prev')?.addEventListener('click', calPrevMonth);
     $('cal-next')?.addEventListener('click', calNextMonth);
 
+    // Bind day navigation
+    $('today-prev')?.addEventListener('click', () => navDay(-1));
+    $('today-next')?.addEventListener('click', () => navDay(1));
+    $('today-today')?.addEventListener('click', () => navDay(0));
+
+    // Bind week navigation
+    $('week-prev')?.addEventListener('click', () => navWeek(-1));
+    $('week-next')?.addEventListener('click', () => navWeek(1));
+    $('week-this')?.addEventListener('click', () => navWeek(0));
+
     // Bind modal close
     $('modal-close')?.addEventListener('click', () => $('modal-overlay')?.classList.remove('open'));
     $('modal-overlay')?.addEventListener('click', e => {
@@ -1634,9 +1657,6 @@
     // Set active nav tab and view panel
     switchView(state.currentView);
   }
-
-  // Expose for inline onclick handlers
-  window.TP = { selectClass, clearClasses, switchView, openLessonModal, navDay, navWeek };
 
   // Start
   if (document.readyState === 'loading') {

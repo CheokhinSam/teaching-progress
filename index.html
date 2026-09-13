@@ -2,6 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src https://api.github.com; img-src 'self' data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#2563eb">
   <meta name="mobile-web-app-capable" content="yes">
@@ -76,11 +77,11 @@
       <main class="main-content">
         <!-- Nav Tabs -->
         <nav class="nav-tabs">
-          <button class="nav-tab active" data-view="today" onclick="window.TP.switchView('today')">今日課堂</button>
-          <button class="nav-tab" data-view="week" onclick="window.TP.switchView('week')">本週課表</button>
-          <button class="nav-tab" data-view="compare" onclick="window.TP.switchView('compare')">進度對比</button>
-          <button class="nav-tab" data-view="calendar" onclick="window.TP.switchView('calendar')">行事曆</button>
-          <button class="nav-tab" data-view="settings" onclick="window.TP.switchView('settings')">⚙ 設定</button>
+          <button class="nav-tab active" data-view="today">今日課堂</button>
+          <button class="nav-tab" data-view="week">本週課表</button>
+          <button class="nav-tab" data-view="compare">進度對比</button>
+          <button class="nav-tab" data-view="calendar">行事曆</button>
+          <button class="nav-tab" data-view="settings">⚙ 設定</button>
         </nav>
 
         <!-- ===== VIEW: TODAY ===== -->
@@ -103,10 +104,10 @@
             </div>
           </div>
           <div class="week-nav">
-            <button class="btn btn-outline btn-sm" id="today-prev" onclick="window.TP.navDay(-1)">◀ 前一天</button>
+            <button class="btn btn-outline btn-sm" id="today-prev">◀ 前一天</button>
             <span id="today-label" style="font-weight:600;font-size:15px"></span>
-            <button class="btn btn-outline btn-sm" id="today-next" onclick="window.TP.navDay(1)">後一天 ▶</button>
-            <button class="btn btn-primary btn-sm" id="today-today" onclick="window.TP.navDay(0)" style="margin-left:8px">今天</button>
+            <button class="btn btn-outline btn-sm" id="today-next">後一天 ▶</button>
+            <button class="btn btn-primary btn-sm" id="today-today" style="margin-left:8px">今天</button>
           </div>
           <div id="today-content"></div>
         </section>
@@ -114,10 +115,10 @@
         <!-- ===== VIEW: WEEK ===== -->
         <section id="view-week" class="view-panel hidden">
           <div class="week-nav">
-            <button class="btn btn-outline btn-sm" id="week-prev" onclick="window.TP.navWeek(-1)">◀ 上週</button>
+            <button class="btn btn-outline btn-sm" id="week-prev">◀ 上週</button>
             <span id="week-label" style="font-weight:600;font-size:15px"></span>
-            <button class="btn btn-outline btn-sm" id="week-next" onclick="window.TP.navWeek(1)">下週 ▶</button>
-            <button class="btn btn-primary btn-sm" id="week-this" onclick="window.TP.navWeek(0)" style="margin-left:8px">本週</button>
+            <button class="btn btn-outline btn-sm" id="week-next">下週 ▶</button>
+            <button class="btn btn-primary btn-sm" id="week-this" style="margin-left:8px">本週</button>
           </div>
           <div id="week-content"></div>
         </section>
