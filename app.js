@@ -556,17 +556,13 @@
       state.selectedClasses.add(className);
     }
     lsSet(LS_KEYS.selectedClasses, [...state.selectedClasses]);
-    document.querySelectorAll('.class-item').forEach(el =>
-      el.classList.toggle('active', state.selectedClasses.has(el.dataset.class))
-    );
-    renderCurrentView();
+    renderAll();
   }
 
   function clearClasses() {
     state.selectedClasses.clear();
     lsSet(LS_KEYS.selectedClasses, []);
-    document.querySelectorAll('.class-item').forEach(el => el.classList.remove('active'));
-    renderCurrentView();
+    renderAll();
   }
 
   // ============ UI: RENDER ALL ============
@@ -620,7 +616,7 @@
         </div>`;
     }
     el.innerHTML = html;
-    el.querySelectorAll('.class-item').forEach(item => {
+    el.querySelectorAll('.class-item[data-class]').forEach(item => {
       item.addEventListener('click', () => selectClass(item.dataset.class));
     });
   }
