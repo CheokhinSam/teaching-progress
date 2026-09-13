@@ -1619,10 +1619,8 @@
       try { await navigator.serviceWorker.register('./sw.js'); } catch { }
     }
 
-    // Set active nav tab
-    document.querySelectorAll('.nav-tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.view === state.currentView)
-    );
+    // Set active nav tab and view panel
+    switchView(state.currentView);
   }
 
   // Expose for inline onclick handlers
