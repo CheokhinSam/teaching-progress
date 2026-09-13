@@ -465,7 +465,7 @@
       const res = await fetch(GIST_API, {
         method: 'POST', headers: headers(),
         body: JSON.stringify({
-          description: 'Teaching Progress Data (Private)',
+          description: 'Data (Private)',
           public: false,
           files: { 'progress.json': { content: JSON.stringify(data, null, 2) } }
         })
@@ -1093,7 +1093,7 @@
         <div class="form-group">
           <label>GitHub Personal Access Token</label>
           <input type="password" id="settings-token" value="${state.token}" placeholder="ghp_xxxxxxxxxxxx">
-          <div class="hint">需要 <code>gist</code> 權限。<a href="https://github.com/settings/tokens/new?scopes=gist&description=Teaching+Progress+Tracker" target="_blank">點此建立 Token</a></div>
+          <div class="hint">需要 <code>gist</code> 權限。<a href="https://github.com/settings/tokens/new?scopes=gist&description=App" target="_blank">點此建立 Token</a></div>
         </div>
         <div class="form-group">
           <label>課程設定 Gist ID</label>
