@@ -16,7 +16,7 @@
     plan: 'tp_plan',
     progress: 'tp_progress',
     lastSync: 'tp_last_sync',
-    selectedClass: 'tp_selected_class',
+    selectedClasses: 'tp_selected_classes',
     currentView: 'tp_current_view',
     expandedLessons: 'tp_expanded'
   };
@@ -30,7 +30,7 @@
     progress: null,
     lessons: {},        // { className: [lesson, ...] }
     currentView: 'today',
-    selectedClass: null,
+    selectedClasses: new Set(),
     expandedLessons: new Set(),
     isLoading: false,
     isDirty: false,
@@ -550,15 +550,22 @@
   }
 
   function selectClass(className) {
-    if (state.selectedClass === className) {
-      state.selectedClass = null;
+    if (state.selectedClasses.has(className)) {
+      state.selectedClasses.delete(className);
     } else {
-      state.selectedClass = className;
+      state.selectedClasses.add(className);
     }
-    lsSet(LS_KEYS.selectedClass, state.selectedClass);
+    lsSet(LS_KEYS.selectedClasses, [...state.selectedClasses]);
     document.querySelectorAll('.class-item').forEach(el =>
-      el.classList.toggle('active', el.dataset.class === state.selectedClass)
+      el.classList.toggle('active', state.selectedClasses.has(el.dataset.class))
     );
+    renderCurrentView();
+  }
+
+  function clearClasses() {
+    state.selectedClasses.clear();
+    lsSet(LS_KEYS.selectedClasses, []);
+    document.querySelectorAll('.class-item').forEach(el => el.classList.remove('active'));
     renderCurrentView();
   }
 
@@ -591,8 +598,8 @@
     if (!el || !state.plan) return;
     const classes = Object.keys(state.plan.schedule);
     let html = '';
-    if (state.selectedClass) {
-      html += `<div class="class-item" onclick="window.TP.selectClass('${state.selectedClass}')" style="color:var(--primary);font-size:13px;justify-content:center;border-bottom:1px solid var(--gray-200);margin-bottom:4px;padding-bottom:12px">
+    if (state.selectedClasses.size > 0) {
+      html += `<div class="class-item" onclick="window.TP.clearClasses()" style="color:var(--primary);font-size:13px;justify-content:center;border-bottom:1px solid var(--gray-200);margin-bottom:4px;padding-bottom:12px">
         ✕ 顯示全部班級
       </div>`;
     }
@@ -607,7 +614,7 @@
       const badgeClass = stats.status === 'ok' ? 'badge-ok' : stats.status === 'behind' ? 'badge-behind' : 'badge-ahead';
       const badgeText = stats.status === 'ok' ? '正常' : stats.status === 'behind' ? `落後${Math.abs(stats.diff)}` : `領先${stats.diff}`;
       html += `
-        <div class="class-item ${state.selectedClass === cls ? 'active' : ''}" data-class="${cls}">
+        <div class="class-item ${state.selectedClasses.has(cls) ? 'active' : ''}" data-class="${cls}">
           <span>${cls}</span>
           <span class="badge ${badgeClass}">${badgeText}</span>
         </div>`;
@@ -643,7 +650,7 @@
     // Lessons for the viewed date
     const dayLessons = [];
     for (const [cls, lessons] of Object.entries(state.lessons)) {
-      if (state.selectedClass && cls !== state.selectedClass) continue;
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
       for (const l of lessons) {
         if (l.date === viewDateStr) dayLessons.push(l);
       }
@@ -686,7 +693,7 @@
 
     const weekLessons = [];
     for (const [cls, lessons] of Object.entries(state.lessons)) {
-      if (state.selectedClass && cls !== state.selectedClass) continue;
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
       for (const l of lessons) {
         const ld = parseDate(l.date);
         if (ld >= weekStart && ld <= weekEnd) weekLessons.push(l);
@@ -917,7 +924,7 @@
       const classes = Object.keys(state.lessons);
       legend.innerHTML = classes.map(cls => {
         const color = CLASS_COLORS[cls] || '#64748b';
-        const isActive = !state.selectedClass || state.selectedClass === cls;
+        const isActive = state.selectedClasses.size === 0 || state.selectedClasses.has(cls);
         const opacity = isActive ? '1' : '0.3';
         return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" onclick="window.TP.selectClass('${cls}')"><span class="cal-legend-dot" style="background:${color}"></span>${cls}</span>`;
       }).join('');
@@ -935,7 +942,7 @@
     // Collect all lessons for this month
     const allLessons = [];
     for (const [cls, lessons] of Object.entries(state.lessons)) {
-      if (state.selectedClass && cls !== state.selectedClass) continue;
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
       for (const l of lessons) {
         const d = parseDate(l.date);
         if (d.getFullYear() === year && d.getMonth() === month) {
@@ -1535,7 +1542,7 @@
     state.planGistId = lsGet(LS_KEYS.planGistId, '');
     state.progressGistId = lsGet(LS_KEYS.progressGistId, '');
     state.currentView = lsGet(LS_KEYS.currentView, 'today');
-    state.selectedClass = lsGet(LS_KEYS.selectedClass, null);
+    state.selectedClasses = new Set(lsGet(LS_KEYS.selectedClasses, []));
     const expanded = lsGet(LS_KEYS.expandedLessons, []);
     state.expandedLessons = new Set(expanded);
 
@@ -1619,7 +1626,7 @@
   }
 
   // Expose for inline onclick handlers
-  window.TP = { selectClass, switchView, openLessonModal, navDay, navWeek };
+  window.TP = { selectClass, clearClasses, switchView, openLessonModal, navDay, navWeek };
 
   // Start
   if (document.readyState === 'loading') {
