@@ -457,12 +457,20 @@
     return state.progress;
   }
 
-  async function apiSaveProgress() {
-    // 覆蓋遠端前，先確認遠端有沒有別台裝置寫過的新版本 —— 有的話先存起來
-    if (state.progressGistId) {
+  // force = 使用者明確選擇要覆蓋（還原備份時），跳過衝突檢查
+  async function apiSaveProgress(force) {
+    // 覆蓋遠端前，先確認遠端有沒有別台裝置寫過的新版本
+    if (state.progressGistId && !force) {
       const remote = await fetchRemoteProgress();
-      if (remote && remote._meta?.last_modified !== state.progress?._meta?.last_modified) {
+      const remoteStamp = remote?._meta?.last_modified;
+      const localStamp = state.progress?._meta?.last_modified;
+      if (remote && remoteStamp && remoteStamp !== localStamp) {
+        // 遠端比較新 —— 兩邊都先備份，然後拒絕覆蓋
         takeSnapshot('被覆蓋的遠端版本', remote, true);
+        takeSnapshot('未同步的變更', buildProgressData(), true);
+        const err = new Error('另一台裝置有更新，未覆蓋。請到「設定 → 版本紀錄」選擇要保留的版本');
+        err.conflict = true;
+        throw err;
       }
     }
     takeSnapshot('同步前', state.progress);
@@ -497,10 +505,16 @@
     lsSet(LS_KEYS.lastSync, new Date().toISOString());
   }
 
-  const saveProgress = debounce(async () => {
-    try { await apiSaveProgress(); toast('已同步', 'success'); }
-    catch (e) { toast('同步失敗: ' + e.message, 'error'); }
-  }, 2000);
+  // 立即儲存，不經 debounce。手機切離畫面時計時器會被凍結，必須直接呼叫這個
+  function saveProgressNow() {
+    apiSaveProgress()
+      .then(() => toast('已同步', 'success'))
+      .catch(e => e.conflict
+        ? toast(e.message, 'warning')                        // 是保護機制，不是失敗
+        : toast('同步失敗: ' + e.message, 'error'));
+  }
+
+  const saveProgress = debounce(saveProgressNow, 2000);
 
   // ============ DATA: SNAPSHOTS (自動版本備份) ============
   const SNAPSHOT_LIMIT = 5;
@@ -509,6 +523,14 @@
   function getSnapshots() {
     const list = lsGet(LS_KEYS.snapshots, []);
     return Array.isArray(list) ? list : [];
+  }
+
+  // buildProgressData() 每次呼叫都會蓋上新的 last_modified，
+  // 去重時必須忽略它，否則同樣的內容會被當成不同版本重複備份
+  function contentKey(data) {
+    const meta = { ...(data._meta || {}) };
+    delete meta.last_modified;
+    return JSON.stringify({ ...data, _meta: meta });
   }
 
   // payload 省略時，備份目前記憶體中的版本。force = 不受間隔限制
@@ -523,7 +545,10 @@
     if (!hasData) return;                                   // 空進度不值得備份
 
     const list = getSnapshots();
-    if (list[0]?.body === body) return;                      // 內容相同就不重複存
+    const key = contentKey(data);
+    if (list.some(s => {                                      // 這份內容已經存過就不重複存
+      try { return contentKey(JSON.parse(s.body)) === key; } catch { return false; }
+    })) return;
     if (!force && list[0] && Date.now() - new Date(list[0].at).getTime() < SNAPSHOT_MIN_GAP) return;
 
     const next = [{ at: new Date().toISOString(), reason, body }, ...list].slice(0, SNAPSHOT_LIMIT);
@@ -563,10 +588,13 @@
     takeSnapshot('還原前', state.progress, true);   // 先留退路
     state.progress = restored;
     lsSet(LS_KEYS.progress, restored);
+    state.isDirty = true;                           // 還沒送上遠端
     generateLessonSlots();
-    markDirty();
     renderAll();
-    toast('已還原備份', 'success');
+    // 還原是使用者的明確選擇 → 直接覆蓋遠端，不再做衝突檢查
+    apiSaveProgress(true)
+      .then(() => toast('已還原並同步', 'success'))
+      .catch(e => toast('還原後同步失敗: ' + e.message, 'error'));
   }
 
   function clearSnapshots() {
@@ -1760,15 +1788,22 @@
 
     // Bind auto-sync on visibility change
     document.addEventListener('visibilitychange', async () => {
-      if (!document.hidden && state.token && state.plan) {
-        try {
-          // 重新載入會蓋掉還沒同步的本機修改，先留一份
-          if (state.isDirty) takeSnapshot('未同步的變更', buildProgressData(), true);
-          if (state.progressGistId) await apiLoadProgress();
-          generateLessonSlots();
-          renderAll();
-        } catch { }
+      // 切離畫面（手機切到別的 App）＝ 立刻把待存的內容送出，不等 debounce
+      if (document.hidden) {
+        if (state.isDirty) {
+          clearTimeout(state.saveTimer);
+          saveProgressNow();
+        }
+        return;
       }
+
+      if (!state.token || !state.plan) return;
+      if (state.isDirty) return;   // 還有沒同步的修改，先不要被遠端覆蓋
+      try {
+        if (state.progressGistId) await apiLoadProgress();
+        generateLessonSlots();
+        renderAll();
+      } catch { }
     });
 
     // Register SW
