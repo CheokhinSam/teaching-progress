@@ -18,7 +18,8 @@
     lastSync: 'tp_last_sync',
     selectedClasses: 'tp_selected_classes',
     currentView: 'tp_current_view',
-    expandedLessons: 'tp_expanded'
+    expandedLessons: 'tp_expanded',
+    snapshots: 'tp_snapshots'
   };
 
   // ============ STATE ============
@@ -457,6 +458,15 @@
   }
 
   async function apiSaveProgress() {
+    // 覆蓋遠端前，先確認遠端有沒有別台裝置寫過的新版本 —— 有的話先存起來
+    if (state.progressGistId) {
+      const remote = await fetchRemoteProgress();
+      if (remote && remote._meta?.last_modified !== state.progress?._meta?.last_modified) {
+        takeSnapshot('被覆蓋的遠端版本', remote, true);
+      }
+    }
+    takeSnapshot('同步前', state.progress);
+
     const data = buildProgressData();
     state.progress = data;
     lsSet(LS_KEYS.progress, data);
@@ -491,6 +501,93 @@
     try { await apiSaveProgress(); toast('已同步', 'success'); }
     catch (e) { toast('同步失敗: ' + e.message, 'error'); }
   }, 2000);
+
+  // ============ DATA: SNAPSHOTS (自動版本備份) ============
+  const SNAPSHOT_LIMIT = 5;
+  const SNAPSHOT_MIN_GAP = 10 * 60 * 1000;   // 非強制備份的最小間隔
+
+  function getSnapshots() {
+    const list = lsGet(LS_KEYS.snapshots, []);
+    return Array.isArray(list) ? list : [];
+  }
+
+  // payload 省略時，備份目前記憶體中的版本。force = 不受間隔限制
+  function takeSnapshot(reason, payload, force) {
+    const data = payload || state.progress;
+    if (!data?.classes) return;
+
+    const body = JSON.stringify(data);
+    const hasData = Object.values(data.classes).some(c =>
+      Object.values(c || {}).some(s => (s?.lessons || []).length > 0)
+    );
+    if (!hasData) return;                                   // 空進度不值得備份
+
+    const list = getSnapshots();
+    if (list[0]?.body === body) return;                      // 內容相同就不重複存
+    if (!force && list[0] && Date.now() - new Date(list[0].at).getTime() < SNAPSHOT_MIN_GAP) return;
+
+    const next = [{ at: new Date().toISOString(), reason, body }, ...list].slice(0, SNAPSHOT_LIMIT);
+    try {
+      lsSet(LS_KEYS.snapshots, next);
+    } catch {
+      // 空間不足時只留最新一版，不要讓存檔失敗
+      try { lsSet(LS_KEYS.snapshots, next.slice(0, 1)); } catch { }
+    }
+  }
+
+  function snapshotSummary(snap) {
+    try {
+      const d = JSON.parse(snap.body);
+      let done = 0, total = 0;
+      for (const c of Object.values(d.classes || {})) {
+        for (const sem of ['semester1', 'semester2']) {
+          const recs = c?.[sem]?.lessons || [];
+          total += recs.length;
+          done += recs.filter(r => r.done).length;
+        }
+      }
+      return `${done} 節已完成 · ${total} 筆紀錄`;
+    } catch { return '（無法讀取）'; }
+  }
+
+  function restoreSnapshot(index) {
+    const snap = getSnapshots()[index];
+    if (!snap) return;
+    const when = new Date(snap.at).toLocaleString('zh-TW');
+    if (!confirm(`確定還原到 ${when} 的版本？\n\n目前的進度會被覆蓋，但還原前會自動保留現況。`)) return;
+
+    let restored;
+    try { restored = JSON.parse(snap.body); }
+    catch { toast('備份資料損毀，無法還原', 'error'); return; }
+
+    takeSnapshot('還原前', state.progress, true);   // 先留退路
+    state.progress = restored;
+    lsSet(LS_KEYS.progress, restored);
+    generateLessonSlots();
+    markDirty();
+    renderAll();
+    toast('已還原備份', 'success');
+  }
+
+  function clearSnapshots() {
+    if (!confirm('確定清除所有版本備份？清除後無法復原。')) return;
+    localStorage.removeItem(LS_KEYS.snapshots);
+    renderSettings();
+    toast('已清除備份', 'info');
+  }
+
+  // 只讀取遠端目前內容，不改動任何狀態
+  async function fetchRemoteProgress() {
+    if (!state.progressGistId) return null;
+    try {
+      const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
+      if (!res.ok) return null;
+      const gist = await res.json();
+      const file = gist.files?.['progress.json'] || Object.values(gist.files || {})[0];
+      if (!file?.content) return null;
+      return JSON.parse(file.content);
+    } catch { return null; }
+  }
 
   async function apiVerifyToken(token) {
     const res = await fetch('https://api.github.com/user', {
@@ -1067,6 +1164,18 @@
     const hasPlanGist = !!state.planGistId;
     const hasProgressGist = !!state.progressGistId;
     const lastSync = lsGet(LS_KEYS.lastSync, '');
+    const snaps = getSnapshots();
+
+    const snapshotHtml = snaps.length === 0
+      ? `<p style="font-size:13px;color:var(--gray-400);line-height:1.7">尚無備份。每次同步、重設進度或還原前，會自動保留當下的版本，最多 5 份。</p>`
+      : snaps.map((s, i) => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--gray-100)">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600">${escHtml(s.reason)}</div>
+              <div style="font-size:12px;color:var(--gray-400)">${new Date(s.at).toLocaleString('zh-TW')} · ${snapshotSummary(s)}</div>
+            </div>
+            <button class="btn btn-sm btn-outline snap-restore-btn" data-index="${i}">還原</button>
+          </div>`).join('');
 
     container.innerHTML = `
       <div class="card settings-section">
@@ -1121,6 +1230,12 @@
       </div>
 
       <div class="card settings-section">
+        <h3>版本紀錄（自動備份）</h3>
+        <div style="margin-top:8px">${snapshotHtml}</div>
+        ${snaps.length > 0 ? `<button class="btn btn-sm btn-outline" id="btn-clear-snapshots" style="margin-top:12px">清除全部備份</button>` : ''}
+      </div>
+
+      <div class="card settings-section">
         <h3>多裝置同步教學</h3>
         <div style="font-size:14px;color:var(--gray-600);line-height:1.8">
           <p>1. 在每台裝置的瀏覽器開啟此 App</p>
@@ -1138,6 +1253,10 @@
     $('btn-import-data')?.addEventListener('click', () => $('import-file')?.click());
     $('import-file')?.addEventListener('change', importData);
     $('btn-reset-progress')?.addEventListener('click', resetProgress);
+    $('btn-clear-snapshots')?.addEventListener('click', clearSnapshots);
+    container.querySelectorAll('.snap-restore-btn').forEach(btn => {
+      btn.addEventListener('click', () => restoreSnapshot(Number(btn.dataset.index)));
+    });
   }
 
   // ============ ACTIONS ============
@@ -1481,12 +1600,13 @@
   }
 
   async function resetProgress() {
-    if (!confirm('確定要重設所有進度？此操作不可復原。')) return;
+    if (!confirm('確定要重設所有進度？\n\n重設前會自動保留一份備份，可從「版本紀錄」還原。')) return;
+    takeSnapshot('重設前', state.progress, true);   // 最危險的操作，強制留一份
     initEmptyProgress();
     generateLessonSlots();
     markDirty();
     renderAll();
-    toast('進度已重設', 'warning');
+    toast('進度已重設（可從版本紀錄還原）', 'warning');
   }
 
   // ============ SETUP FLOW ============
@@ -1642,6 +1762,8 @@
     document.addEventListener('visibilitychange', async () => {
       if (!document.hidden && state.token && state.plan) {
         try {
+          // 重新載入會蓋掉還沒同步的本機修改，先留一份
+          if (state.isDirty) takeSnapshot('未同步的變更', buildProgressData(), true);
           if (state.progressGistId) await apiLoadProgress();
           generateLessonSlots();
           renderAll();
