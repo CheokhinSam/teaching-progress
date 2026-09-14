@@ -243,14 +243,42 @@
   }
 
   // ============ DATA: LESSON SLOT GENERATION ============
+  // 學期起訖日優先用 plan.json 的 "semesters" 欄位，沒有才用下面的預設值。
+  // 換學年時只要在 plan 的 Gist 補上這段，不必改程式：
+  //   "semesters": {
+  //     "semester1": { "start": "2026-09-01", "end": "2027-01-23" },
+  //     "semester2": { "start": "2027-02-03", "end": "2027-07-07" }
+  //   }
+  const DEFAULT_SEMESTERS = {
+    semester1: { start: '2026-09-01', end: '2027-01-23' },
+    semester2: { start: '2027-02-03', end: '2027-07-07' }
+  };
+
+  function getSemesterRanges() {
+    const cfg = state.plan?.semesters || {};
+    const valid = d => d instanceof Date && !isNaN(d.getTime());
+    const pick = key => {
+      const fb = DEFAULT_SEMESTERS[key];
+      const s = cfg[key] || {};
+      const start = parseDate(s.start || fb.start);
+      const end = parseDate(s.end || fb.end);
+      // 日期打錯會變成 Invalid Date，產生不出任何課 —— 這種情況退回預設值
+      return valid(start) && valid(end) && start <= end
+        ? { start, end }
+        : { start: parseDate(fb.start), end: parseDate(fb.end) };
+    };
+    return { s1: pick('semester1'), s2: pick('semester2') };
+  }
+
   function generateLessonSlots() {
     if (!state.plan) return;
     const holidaySet = buildHolidaySet();
     const examRanges = buildExamRanges();
-    const sem1Start = parseDate('2026-09-01');
-    const sem1End = parseDate('2027-01-23');
-    const sem2Start = parseDate('2027-02-03');
-    const sem2End = parseDate('2027-07-07');
+    const { s1, s2 } = getSemesterRanges();
+    const sem1Start = s1.start;
+    const sem1End = s1.end;
+    const sem2Start = s2.start;
+    const sem2End = s2.end;
 
     const allLessons = {};
 
@@ -426,28 +454,38 @@
     };
   }
 
+  // gist.files 是物件，鍵的順序沒有保證 —— 直接取 [0] 有可能挑到別的檔案。
+  // 優先用指定檔名；只有一個檔案時就用它；多個檔案又對不上就報錯，不要用猜的。
+  function pickGistFile(gist, name) {
+    const files = gist?.files || {};
+    const names = Object.keys(files);
+    if (files[name]?.content) return files[name];
+    if (names.length === 1 && files[names[0]]?.content) return files[names[0]];
+    const jsonNames = names.filter(n => n.endsWith('.json'));
+    if (jsonNames.length === 1 && files[jsonNames[0]]?.content) return files[jsonNames[0]];
+    throw new Error(`Gist 裡找不到 ${name}${names.length ? `（現有：${names.join('、')}）` : '（這個 Gist 是空的）'}`);
+  }
+
   async function apiLoadPlan() {
     if (!state.planGistId) throw new Error('缺少 plan Gist ID');
     const res = await fetch(`${GIST_API}/${state.planGistId}`, { headers: headers() });
     if (!res.ok) throw new Error(`載入 plan 失敗: ${res.status}`);
     const gist = await res.json();
-    const file = Object.values(gist.files)[0];
+    const file = pickGistFile(gist, 'plan.json');
     state.plan = JSON.parse(file.content);
     lsSet(LS_KEYS.plan, state.plan);
     return state.plan;
   }
 
+  // 讀不到時直接丟錯，讓呼叫端保留原本的快取 ——
+  // 之前是 catch 起來塞一份空的，等於一次網路抖動就把進度清光。
   async function apiLoadProgress() {
     if (!state.progressGistId) return initEmptyProgress();
-    try {
-      const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const gist = await res.json();
-      const file = Object.values(gist.files)[0];
-      state.progress = JSON.parse(file.content);
-    } catch {
-      state.progress = initEmptyProgress();
-    }
+    const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
+    if (!res.ok) throw new Error(`載入進度失敗: ${res.status}`);
+    const gist = await res.json();
+    const file = pickGistFile(gist, 'progress.json');
+    state.progress = JSON.parse(file.content);
     lsSet(LS_KEYS.progress, state.progress);
     return state.progress;
   }
@@ -611,8 +649,7 @@
       const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
       if (!res.ok) return null;
       const gist = await res.json();
-      const file = gist.files?.['progress.json'] || Object.values(gist.files || {})[0];
-      if (!file?.content) return null;
+      const file = pickGistFile(gist, 'progress.json');
       return JSON.parse(file.content);
     } catch { return null; }
   }
@@ -653,7 +690,9 @@
     const total = lessons.length;
     const done = lessons.filter(l => l.done).length;
     const current = lessons.find(l => !l.done);
-    const overdue = lessons.filter(l => !l.done && parseDate(l.date) < td).length;
+    // 已標「延期」的課是老師自己擱下的，不該再當成逾期來提醒。
+    // 但它仍然算在 expectedDone 裡 —— 進度確實落後了，那是 shift_count 要處理的事。
+    const overdue = lessons.filter(l => !l.done && !l.postponed && parseDate(l.date) < td).length;
     const pct = total > 0 ? Math.round(done / total * 100) : 0;
     const expectedDone = lessons.filter(l => parseDate(l.date) <= td).length;
     const diff = done - expectedDone;
@@ -765,7 +804,7 @@
     for (const [_, lessons] of allLessons) {
       for (const l of lessons) {
         if (l.done) totalDone++;
-        if (!l.done && parseDate(l.date) < td) totalOverdue++;
+        if (!l.done && !l.postponed && parseDate(l.date) < td) totalOverdue++;
       }
     }
 
@@ -864,7 +903,7 @@
     let statusClass = '';
     if (l.done) statusClass = 'completed';
     else if (isSameDay(ld, td)) statusClass = 'today';
-    else if (ld < td) statusClass = 'overdue';
+    else if (ld < td && !l.postponed) statusClass = 'overdue';
     if (l.postponed) statusClass += ' shifted';
 
     const isExpanded = state.expandedLessons.has(l.id);
@@ -1130,7 +1169,7 @@
       html += `</div>`;
 
       for (const l of dayLessons) {
-        const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.done ? 'overdue' : 'pending');
+        const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.postponed ? 'overdue' : 'pending');
         const color = CLASS_COLORS[l.class] || '#64748b';
         html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
         html += `<span class="cal-lesson-class">${escHtml(l.class)}</span>`;
@@ -1343,6 +1382,9 @@
     const cls = l.class;
     const sem = l.semester;
 
+    // 這台裝置若還沒存過進度，state.progress 會是 null
+    if (!state.progress) state.progress = initEmptyProgress();
+    if (!state.progress.classes) state.progress.classes = {};
     if (!state.progress.classes[cls]) state.progress.classes[cls] = {};
     if (!state.progress.classes[cls][sem]) state.progress.classes[cls][sem] = {};
     const currentShift = state.progress.classes[cls][sem].shift_count || 0;
@@ -1365,14 +1407,15 @@
   }
 
   function regenerateClassLessons(cls) {
-    const info = state.plan.schedule[cls];
+    const info = state.plan?.schedule?.[cls];
     if (!info) return;
     const holidaySet = buildHolidaySet();
     const examRanges = buildExamRanges();
-    const sem1Start = parseDate('2026-09-01');
-    const sem1End = parseDate('2027-01-23');
-    const sem2Start = parseDate('2027-02-03');
-    const sem2End = parseDate('2027-07-07');
+    const { s1, s2 } = getSemesterRanges();
+    const sem1Start = s1.start;
+    const sem1End = s1.end;
+    const sem2Start = s2.start;
+    const sem2End = s2.end;
     const slots = info.weekly_slots || [];
     const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
     const slotsByDay = {};
