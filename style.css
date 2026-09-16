@@ -1,6 +1,5 @@
 :root {
   --primary: #2563eb;
-  --primary-light: #3b82f6;
   --primary-dark: #1d4ed8;
   --success: #10b981;
   --success-light: #d1fae5;
@@ -90,8 +89,6 @@ body {
   white-space: nowrap;
 }
 
-.app-header .logo span { font-size: 24px; margin-right: 6px; }
-
 .header-right {
   margin-left: auto;
   display: flex;
@@ -118,6 +115,9 @@ body {
 }
 
 .sync-banner .btn { padding: 2px 8px; font-size: 11px; }
+
+/* 存完之後短暫變綠色報平安，2.5 秒後自己消失 */
+.sync-banner.saved { background: var(--success-light); color: #065f46; }
 
 .app-body {
   display: flex;
@@ -229,19 +229,6 @@ body {
   margin-bottom: 16px;
 }
 
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.card-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--gray-800);
-}
-
 /* ========= LESSON CARDS ========= */
 .lesson-card {
   background: white;
@@ -303,33 +290,54 @@ body {
   margin-top: 4px;
 }
 
+/* font-size 留在容器上：已延期待補清單（renderToday）用的是同一組類別，
+   但裡面只有一行純文字，不會經過 .inline-edit。 */
 .lesson-topic {
   font-size: 14px;
   color: var(--gray-700);
   margin-top: 8px;
-  line-height: 1.5;
-}
-
-.lesson-topic input {
-  width: 100%;
-  border: 1px solid var(--gray-300);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 14px;
-  font-family: inherit;
 }
 
 .lesson-note {
   font-size: 13px;
   color: var(--gray-500);
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: var(--gray-50);
-  border-radius: 8px;
-  cursor: pointer;
+  margin-top: 6px;
 }
 
-.lesson-note:hover { background: var(--gray-100); }
+/* 就地編輯：主題與備註平時看起來就是一行文字，點一下才變成明顯的輸入框。
+   以前得先按「展開」才生得出輸入框，改一個欄位要點兩下。負 margin 加同寬的
+   width 是為了把 padding 與邊框抵掉，讓文字跟上面的班級、節次左緣對齊。 */
+.inline-edit {
+  display: block;
+  width: calc(100% + 16px);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 7px;
+  margin: -4px -8px;
+  resize: none;
+  overflow: hidden;
+  /* 一定要蓋掉 textarea{min-height:80px}（見下方 FORMS 段）。沒蓋的話每一行
+     備註都會被撐成 80px 高，整張卡被拉長 —— 純 CSS 的錯，測試看不出來。 */
+  min-height: 0;
+}
+
+.lesson-note .inline-edit { font-size: 13px; }
+
+.inline-edit::placeholder { color: var(--gray-400); }
+
+.inline-edit:hover { background: var(--gray-100); }
+
+.inline-edit:focus {
+  background: white;
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
 
 .lesson-actions {
   display: flex;
@@ -393,13 +401,6 @@ body {
 
 .btn-danger:hover { background: #dc2626; }
 
-.btn-warning {
-  background: var(--warning);
-  color: white;
-}
-
-.btn-warning:hover { background: #d97706; }
-
 .btn-sm {
   padding: 5px 10px;
   font-size: 12px;
@@ -421,8 +422,10 @@ body {
 }
 
 .check-btn {
-  width: 36px;
-  height: 36px;
+  /* 44px 是好按的最小尺寸。這是整個 app 點最多次的按鈕（打勾「上完了」），
+     在手機上 36px 常常點不準。 */
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 2px solid var(--gray-300);
   background: white;
@@ -430,7 +433,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 20px;
   transition: var(--transition);
   flex-shrink: 0;
 }
@@ -872,18 +875,6 @@ textarea { resize: vertical; min-height: 80px; }
   color: var(--gray-400);
 }
 
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--gray-200);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 12px;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
 /* ========= SETTINGS ========= */
 .settings-section {
   margin-bottom: 24px;
@@ -947,9 +938,18 @@ textarea { resize: vertical; min-height: 80px; }
   /* 原本寫的是 .calendar-grid，這個類別不存在，所以這條規則從來沒生效過。
      實際類別是 .cal-month-grid（週一到週五 5 欄）。窄螢幕上把格子收緊，
      而不是改成單欄 —— 單欄會變成二十幾格的長條清單，反而看不出一個月的樣子。 */
+  /* 日曆是整個 app 字最小的地方：課堂 11px、班級 9px、標記 10px，全塞在約
+     65px 寬的格子裡。原本這裡把 .cal-lesson 再降到 10px，比基礎值還小 ——
+     方向是反的，小螢幕反而更難讀。改成放大，並把每個藥丸壓成一行（班級與
+     主題併排），用省下來的高度換字級：藥丸變矮，字反而變大。 */
   .cal-month-grid { gap: 4px; }
-  .cal-day { min-height: 84px; padding: 5px; }
-  .cal-lesson { font-size: 10px; }
+  .cal-day { min-height: 100px; padding: 6px; }
+  .cal-day-num { font-size: 16px; }
+  .cal-lesson { font-size: 12px; }
+  .cal-lesson-class { font-size: 11px; display: inline; margin-right: 4px; }
+  .cal-assess-chip { font-size: 11px; }
+  .cal-assess-n { font-size: 10px; }
+  .cal-holiday-tag { font-size: 11px; }
 
   .modal { max-width: 100%; margin: 10px; }
 
