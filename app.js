@@ -327,6 +327,7 @@
             time: slot.time,
             period: slot.period,
             topic: content.label,
+            baseTopic: content.label,   // 產生時的主題，用來判斷老師有沒有改過
             chapter: content.chapter,
             done: false,
             note: '',
@@ -359,6 +360,7 @@
             time: slot.time,
             period: slot.period,
             topic: content.label,
+            baseTopic: content.label,   // 產生時的主題，用來判斷老師有沒有改過
             chapter: content.chapter,
             done: false,
             note: '',
@@ -401,6 +403,12 @@
   }
 
   // ============ DATA: SAVE PROGRESS ============
+  // 主題是否被老師手動改過。比對的是產生當下的 baseTopic，不是重算出來的內容 ——
+  // 「順延」會改變每一節對應的內容，重算會把整班的未修改課堂都誤判成覆寫。
+  function isOverridden(lesson) {
+    return !!lesson && lesson.topic !== lesson.baseTopic;
+  }
+
   function markDirty() {
     state.isDirty = true;
     clearTimeout(state.saveTimer);
@@ -420,7 +428,7 @@
         classData[semKey] = {
           shift_count: shiftCount,
           lessons: semLessons
-            .filter(l => l.done || l.note || l.hw || l.postponed || l.topic !== getOriginalTopic(l))
+            .filter(l => l.done || l.note || l.hw || l.postponed || isOverridden(l))
             .map(l => ({
               lesson: l.lessonNum,
               date: l.date,
@@ -428,21 +436,13 @@
               note: l.note || undefined,
               hw: l.hw || undefined,
               postponed: l.postponed || undefined,
-              topic_override: l.topic !== getOriginalTopic(l) ? l.topic : undefined
+              topic_override: isOverridden(l) ? l.topic : undefined
             }))
         };
       }
       progress.classes[className] = classData;
     }
     return progress;
-  }
-
-  function getOriginalTopic(lesson) {
-    const content1 = flattenContent(lesson.class, 'semester1');
-    const content2 = flattenContent(lesson.class, 'semester2');
-    const content = lesson.semester === 'semester1' ? content1 : content2;
-    const idx = lesson.lessonNum - 1;
-    return content[idx]?.label || '(待補)';
   }
 
   // ============ API: GIST ============
@@ -491,7 +491,10 @@
   }
 
   function initEmptyProgress() {
-    state.progress = { _meta: { version: '1.0', created: new Date().toISOString() }, classes: {} };
+    // 一定要帶 last_modified。衝突檢查比的就是這個欄位，
+    // 少了它會變成 undefined !== remoteStamp，之後每一次存檔都會被判定成衝突。
+    const now = new Date().toISOString();
+    state.progress = { _meta: { version: '1.0', created: now, last_modified: now }, classes: {} };
     return state.progress;
   }
 
@@ -511,7 +514,8 @@
         throw err;
       }
     }
-    takeSnapshot('同步前', state.progress);
+    // force：覆蓋前的退路一定要留。預設的 10 分鐘間隔規則會在最需要它的時候把它跳過。
+    takeSnapshot('同步前', state.progress, true);
 
     const data = buildProgressData();
     state.progress = data;
@@ -1448,7 +1452,8 @@
         lessons.push({
           id, class: cls, semester: 'semester1', lessonNum: idx1 + 1,
           date: dateStr, dayOfWeek: DAY_NAMES[dow], time: slot.time, period: slot.period,
-          topic: content.label, chapter: content.chapter,
+          topic: isOverridden(old) ? old.topic : content.label, chapter: content.chapter,
+          baseTopic: content.label,
           done: old?.done || false, note: old?.note || '', hw: old?.hw || null,
           postponed: old?.postponed || false
         });
@@ -1471,7 +1476,8 @@
         lessons.push({
           id, class: cls, semester: 'semester2', lessonNum: idx2 + 1,
           date: dateStr, dayOfWeek: DAY_NAMES[dow], time: slot.time, period: slot.period,
-          topic: content.label, chapter: content.chapter,
+          topic: isOverridden(old) ? old.topic : content.label, chapter: content.chapter,
+          baseTopic: content.label,
           done: old?.done || false, note: old?.note || '', hw: old?.hw || null,
           postponed: old?.postponed || false
         });
@@ -1638,6 +1644,7 @@
     const data = {
       plan: state.plan,
       progress: buildProgressData(),
+      snapshots: getSnapshots(),   // 備份只存在瀏覽器裡，不一起帶走的話清掉就真的沒了
       exported: new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1655,15 +1662,38 @@
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async () => {
+      let data;
+      try { data = JSON.parse(reader.result); }
+      catch { toast('匯入失敗: 不是有效的 JSON', 'error'); return; }
+
+      // 先驗證形狀，通過了才動任何狀態。之前是一邊解析一邊覆寫 localStorage，
+      // 壞檔會留在 tp_plan 裡，下次啟動 generateLessonSlots() 直接丟錯，
+      // 整個 app 跳到設定畫面 —— 看起來就像資料全沒了。
+      const plan = data?.plan;
+      const progress = data?.progress;
+      const planOk = !!plan && typeof plan.schedule === 'object' && plan.schedule !== null;
+      const progressOk = !!progress && typeof progress.classes === 'object' && progress.classes !== null;
+      if (!planOk && !progressOk) {
+        toast('匯入失敗: 檔案裡沒有可用的 plan 或 progress', 'error');
+        return;
+      }
+
+      if (planOk) { state.plan = plan; lsSet(LS_KEYS.plan, plan); }
+      if (progressOk) { state.progress = progress; lsSet(LS_KEYS.progress, progress); }
+      if (Array.isArray(data.snapshots)) {          // 匯出檔有帶備份的話一併還原
+        try { lsSet(LS_KEYS.snapshots, data.snapshots); } catch { }
+      }
+
+      generateLessonSlots();
+      renderAll();
+
+      // 匯入＝「我刻意載入這份」，是明確的覆蓋意圖，直接推上遠端。
+      // 走一般存檔會先被衝突檢查擋下，結果匯入的內容根本沒送出去。
       try {
-        const data = JSON.parse(reader.result);
-        if (data.plan) { state.plan = data.plan; lsSet(LS_KEYS.plan, data.plan); }
-        if (data.progress) { state.progress = data.progress; lsSet(LS_KEYS.progress, data.progress); }
-        generateLessonSlots();
-        renderAll();
+        await apiSaveProgress(true);
         toast('匯入成功', 'success');
       } catch (err) {
-        toast('匯入失敗: 檔案格式錯誤', 'error');
+        toast('匯入成功（僅本機），同步失敗: ' + err.message, 'error');
       }
     };
     reader.readAsText(file);
@@ -1675,9 +1705,15 @@
     takeSnapshot('重設前', state.progress, true);   // 最危險的操作，強制留一份
     initEmptyProgress();
     generateLessonSlots();
-    markDirty();
     renderAll();
-    toast('進度已重設（可從版本紀錄還原）', 'warning');
+    // 重設是明確的覆蓋意圖，必須走 force。走一般存檔路徑的話，遠端那份舊資料
+    // 會讓它被判定成衝突而永遠送不出去 —— 表面上重設了，下次載入又整份回來。
+    try {
+      await apiSaveProgress(true);
+      toast('進度已重設（可從版本紀錄還原）', 'warning');
+    } catch (e) {
+      toast('重設後同步失敗: ' + e.message, 'error');
+    }
   }
 
   // ============ SETUP FLOW ============
