@@ -177,6 +177,108 @@
     return examRanges.some(r => d >= r.start && d <= r.end);
   }
 
+  // ============ DATA: ASSESSMENT DATES ============
+  // plan.json 的 assessments 一直沒有被用到。老師早就把每班的測驗、考試、
+  // 功課截止日都輸入了，行事曆上卻什麼都看不到 —— 這一塊把它攤平成「日期 → 事件」。
+  const ASSESS_LABEL = {
+    test:    { text: '測驗', cls: 'cal-assess-test' },
+    midterm: { text: '期中考', cls: 'cal-assess-exam' },
+    exam:    { text: '考試', cls: 'cal-assess-exam' },
+    hw:      { text: '交', cls: 'cal-assess-hw' },
+    cw:      { text: '堂課', cls: 'cal-assess-cw' }
+  };
+
+  // 只挑字串裡的 YYYY-MM-DD。homework.assign 長成 "W3 2026-09-14"，
+  // 整串丟給 parseDate 會拿到 Invalid Date，所以一律先把日期挑出來。
+  function datesIn(raw) {
+    return (String(raw || '').match(/\d{4}-\d{2}-\d{2}/g) || [])
+      .map(parseDate).filter(d => !isNaN(d));
+  }
+
+  // 單日回一天；寫成區間的（期中考、部分班的考試）逐日展開，這樣整段都看得到。
+  function expandDates(raw) {
+    const ds = datesIn(raw);
+    if (ds.length <= 1) return ds;
+    const out = [];
+    for (let d = new Date(ds[0]); d <= ds[ds.length - 1]; d = addDays(d, 1)) out.push(new Date(d));
+    return out;
+  }
+
+  function buildAssessmentIndex() {
+    const index = new Map();
+    const all = state.plan?.assessments;
+    if (!all || typeof all !== 'object') return index;
+
+    const push = (dateObj, type, detail, cls) => {
+      const key = fmtDate(dateObj);
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push({ type, detail, cls });
+    };
+
+    for (const [cls, sems] of Object.entries(all)) {
+      // 有些班是寫 {"same_as": "初三甲"}，沿用被指向那一班的內容
+      const own = sems && sems.same_as ? all[sems.same_as] : sems;
+      if (!own || typeof own !== 'object') continue;
+      // 行事曆上方已經有班級篩選了，這裡必須跟著同一個篩選，
+      // 否則會冒出「我根本沒選這班」的測驗日。
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
+
+      for (const v of Object.values(own)) {
+        if (!v || typeof v !== 'object') continue;
+        for (const t of v.tests || [])
+          for (const d of expandDates(t.date)) push(d, 'test', t.topic || t.id || '', cls);
+        for (const c of v.classwork || [])
+          for (const d of expandDates(c.date)) push(d, 'cw', c.topic || c.id || '', cls);
+        // 只畫截止日。派發日也畫的話一份功課會佔掉兩格，格子本來就不大。
+        for (const h of v.homework || [])
+          for (const d of expandDates(h.due)) push(d, 'hw', h.topic || h.id || '', cls);
+        for (const [key, type] of [['midterm', 'midterm'], ['exam', 'exam']]) {
+          const o = v[key];
+          if (!o || typeof o !== 'object') continue;
+          for (const d of expandDates(o.period || o.date)) push(d, type, o.scope || '', cls);
+        }
+      }
+    }
+    return index;
+  }
+
+  // 同一天同一個測驗六個班都要考時，畫六個「測驗」沒有意義，
+  // 所以同型別＋同範圍的合成一個，後面掛班級數。
+  //
+  // 考試與期中考例外，只按型別合併：它們是全校統一的日子，但每個班的 scope
+  // 寫法不一樣（初二甲寫「機械運動+聲現象…」、初三甲寫「功與機械能…」、有的班
+  // 根本空著），照 scope 分組會讓同一天冒出三個「考試」標記。scope 收進 tooltip。
+  function renderAssessChips(events) {
+    if (!events || events.length === 0) return '';
+    const schoolWide = t => t === 'exam' || t === 'midterm';
+    const groups = new Map();
+    for (const e of events) {
+      const k = schoolWide(e.type) ? e.type : e.type + '|' + e.detail;
+      if (!groups.has(k)) groups.set(k, { type: e.type, details: [], classes: [] });
+      const g = groups.get(k);
+      if (e.detail && !g.details.includes(e.detail)) g.details.push(e.detail);
+      if (!g.classes.includes(e.cls)) g.classes.push(e.cls);
+    }
+    const list = [...groups.values()];
+    const tip = g => ASSESS_LABEL[g.type].text + (g.details.length ? '：' + g.details.join('／') : '')
+      + '　' + g.classes.join('、');
+
+    let html = '<div class="cal-assess">';
+    for (const g of list.slice(0, 3)) {
+      const meta = ASSESS_LABEL[g.type];
+      html += `<span class="cal-assess-chip ${meta.cls}" title="${escHtml(tip(g))}">`
+        + escHtml(meta.text)
+        + (g.classes.length > 1 ? `<span class="cal-assess-n">${g.classes.length}</span>` : '')
+        + '</span>';
+    }
+    if (list.length > 3) {
+      const rest = list.slice(3);
+      html += `<span class="cal-assess-chip cal-assess-more" title="${escHtml(rest.map(tip).join('\n'))}">`
+        + `+${rest.length}</span>`;
+    }
+    return html + '</div>';
+  }
+
   // ============ DATA: TEACHING CONTENT FLATTENING ============
   // 這個函式每次都要把整個學期的內容陣列重建一遍。記住上一次的 plan 物件身分，
   // plan 換了就整批失效 —— 比在每個會改 plan 的地方手動清快取可靠，不會漏。
@@ -1421,22 +1523,36 @@
     const MONTH_NAMES = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     if (label) label.textContent = `${year}年 ${MONTH_NAMES[month]}`;
 
+    // Build holiday set
+    const holidaySet = buildHolidaySet();
+    const assessIndex = buildAssessmentIndex();
+
     // Legend
     if (legend) {
       const classes = Object.keys(state.lessons);
-      legend.innerHTML = classes.map(cls => {
+      let legendHtml = classes.map(cls => {
         const color = CLASS_COLORS[cls] || '#64748b';
         const isActive = state.selectedClasses.size === 0 || state.selectedClasses.has(cls);
         const opacity = isActive ? '1' : '0.3';
         return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" data-class="${escHtml(cls)}"><span class="cal-legend-dot" style="background:${color}"></span>${escHtml(cls)}</span>`;
       }).join('');
-      legend.querySelectorAll('.cal-legend-item').forEach(item => {
+
+      // 行事曆上只會出現實際存在的標記種類，圖例也照樣只列那幾種 ——
+      // 一直掛著「考試」但整學期沒有考試，只會讓人以為標記漏掉了。
+      const present = new Set();
+      for (const events of assessIndex.values()) for (const e of events) present.add(e.type);
+      if (present.size > 0) {
+        legendHtml += '<span class="cal-legend-sep"></span>'
+          + [...present].map(t =>
+            `<span class="cal-legend-item"><span class="cal-assess-chip ${ASSESS_LABEL[t].cls}">${escHtml(ASSESS_LABEL[t].text)}</span></span>`
+          ).join('');
+      }
+
+      legend.innerHTML = legendHtml;
+      legend.querySelectorAll('.cal-legend-item[data-class]').forEach(item => {
         item.addEventListener('click', () => selectClass(item.dataset.class));
       });
     }
-
-    // Build holiday set
-    const holidaySet = buildHolidaySet();
 
     // Get first day of month and calculate grid
     const firstDay = new Date(year, month, 1);
@@ -1502,6 +1618,10 @@
         html += `<span class="cal-holiday-tag">${escHtml(hol) || '假期'}</span>`;
       }
       html += `</div>`;
+
+      // 測驗／考試／功課截止放在課堂之前 —— 這些是「那天一定要記得」的事，
+      // 課堂清單一長就會把它們擠出格子。
+      html += renderAssessChips(assessIndex.get(dateStr));
 
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.postponed ? 'overdue' : 'pending');
