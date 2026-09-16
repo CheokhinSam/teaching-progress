@@ -19,7 +19,12 @@
     selectedClasses: 'tp_selected_classes',
     currentView: 'tp_current_view',
     expandedLessons: 'tp_expanded',
-    snapshots: 'tp_snapshots'
+    snapshots: 'tp_snapshots',
+    // 本機最後一次看到的遠端 _meta.last_modified。用來判斷本機這份是否有
+    // 還沒送出去的修改 —— 沒有的話，載入時才可以讓遠端覆蓋。
+    lastRemoteStamp: 'tp_last_remote_stamp',
+    // '1' = 有一筆「明確覆蓋」（還原／重設／匯入）還沒成功送出去
+    pendingForce: 'tp_pending_force'
   };
 
   // ============ STATE ============
@@ -33,9 +38,16 @@
     currentView: 'today',
     selectedClasses: new Set(),
     expandedLessons: new Set(),
-    isLoading: false,
     isDirty: false,
     saveTimer: null,
+    // 老師在這一次工作階段碰過的課堂 id。只用來決定存檔時要蓋哪些 updated_at，
+    // 刻意不序列化 —— 文件的時間戳本身就是「這台裝置碰過什麼」的紀錄。
+    dirtyLessons: new Set(),
+    editSeq: 0,          // 每次編輯遞增，用來判斷存檔過程中間有沒有新編輯
+    saveInFlight: false,
+    saveQueued: false,
+    retryDelay: 0,
+    retryTimer: null,
     calendarMonth: null,  // { year, month } for calendar view
     weekOffset: 0,        // 0 = current week, -1 = last week, 1 = next week
     dayOffset: 0          // 0 = today, -1 = yesterday, 1 = tomorrow
@@ -87,10 +99,6 @@
   }
   function isSameDay(a, b) {
     return fmtDate(a) === fmtDate(b);
-  }
-
-  function debounce(fn, ms) {
-    let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   }
 
   function toast(msg, type = 'info') {
@@ -411,38 +419,151 @@
 
   function markDirty() {
     state.isDirty = true;
+    state.editSeq++;
     clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(() => saveProgress(), 2000);
+    // 只有這一層 debounce。之前這裡 setTimeout 到 saveProgress()，而 saveProgress
+    // 自己又是 debounce(…, 2000)，兩個獨立計時器讓實際延遲變成 4 秒，
+    // 而且 visibilitychange 只清得掉其中一個。
+    state.saveTimer = setTimeout(saveProgressNow, 2000);
+    renderSyncBanner();
+  }
+
+  // 課堂層級的變更。記下是哪一節被碰過，存檔時才知道要蓋哪些 updated_at。
+  function markLessonDirty(id) {
+    state.dirtyLessons.add(id);
+    markDirty();
+  }
+
+  // 蓋時間戳時做單調夾制：裝置時鐘偏慢的話，新版本的時間戳可能比文件上一版還舊，
+  // 那這台裝置的修改會在每一次合併都輸掉。
+  function stampNow() {
+    const prev = state.progress?._meta?.last_modified;
+    const now = new Date().toISOString();
+    if (!prev || now > prev) return now;
+    return new Date(new Date(prev).getTime() + 1).toISOString();
   }
 
   function buildProgressData() {
-    const progress = { _meta: state.progress?._meta || {}, classes: {} };
+    const progress = { _meta: { ...(state.progress?._meta || {}) }, classes: {} };
     progress._meta.version = '1.0';
-    progress._meta.last_modified = new Date().toISOString();
+    progress._meta.last_modified = stampNow();
+    const now = progress._meta.last_modified;
 
     for (const [className, lessons] of Object.entries(state.lessons)) {
       const classData = {};
       for (const semKey of ['semester1', 'semester2']) {
         const semLessons = lessons.filter(l => l.semester === semKey);
-        const shiftCount = state.progress?.classes?.[className]?.[semKey]?.shift_count || 0;
+        const prevSem = state.progress?.classes?.[className]?.[semKey];
+        const prevRecords = prevSem?.lessons || [];
+
         classData[semKey] = {
-          shift_count: shiftCount,
-          lessons: semLessons
-            .filter(l => l.done || l.note || l.hw || l.postponed || isOverridden(l))
-            .map(l => ({
+          shift_count: prevSem?.shift_count || 0,
+          lessons: semLessons.map(l => {
+            const prev = prevRecords.find(r => r.lesson === l.lessonNum);
+            // 碰過的蓋新時間戳；沒碰過的沿用載入時帶進來的值。
+            // 這裡刻意不給沒有值的紀錄補一個「現在」—— 那會讓每一筆沒碰過的課堂
+            // 都被當成有變動而寫進文件（稀疏過濾整段失效），而且會讓它們在合併時
+            // 無條件贏過別台裝置真正較新的紀錄。代理值改在 mergeProgressData 裡給。
+            const updated_at = state.dirtyLessons.has(l.id) ? now : prev?.updated_at;
+            // 最後一項是關鍵：紀錄一旦被碰過就永遠保留。少了它，「取消打卡」會讓
+            // 所有欄位變成 falsy 而整筆消失，合併時遠端較舊的 done:true 就會復活。
+            if (!(l.done || l.note || l.hw || l.postponed || isOverridden(l) || updated_at)) return null;
+            return {
               lesson: l.lessonNum,
               date: l.date,
               done: l.done,
               note: l.note || undefined,
               hw: l.hw || undefined,
               postponed: l.postponed || undefined,
-              topic_override: isOverridden(l) ? l.topic : undefined
-            }))
+              topic_override: isOverridden(l) ? l.topic : undefined,
+              updated_at
+            };
+          }).filter(Boolean)
         };
+        if (prevSem?.shift_count_at) classData[semKey].shift_count_at = prevSem.shift_count_at;
       }
       progress.classes[className] = classData;
     }
+
+    // plan 裡沒有的班級原樣保留。這台裝置的 plan 可能比較舊，
+    // 不該因為它認不得就把別台裝置的紀錄刪掉 —— 在 union 合併下那會變成
+    // 「合併加回來、下次存檔又刪掉」的無限循環。
+    for (const [cls, data] of Object.entries(state.progress?.classes || {})) {
+      if (!progress.classes[cls]) progress.classes[cls] = data;
+    }
+
     return progress;
+  }
+
+  // 逐節合併。課堂紀錄彼此獨立 —— A 裝置勾了初三甲第 12 節、B 裝置勾了高一乙第 8 節
+  // 根本不衝突，沒有理由叫老師二選一。
+  //
+  // 時間戳取 rec.updated_at || 文件的 _meta.last_modified。後面那個 fallback 是必要的：
+  // 舊版 app 的紀錄映射是固定欄位列表，會把 updated_at 整個洗掉，所以舊版每存一次檔，
+  // 它的紀錄就全都變成「沒有時間戳」。若把沒時間戳一律當成最舊，新版的本機修改就全輸。
+  // localPrevStamp = 本機這份「存檔前」的 _meta.last_modified。沒有逐筆時間戳的紀錄
+  // （舊版 app 寫的）就用它當代理值。不能用剛蓋上的新時間戳 —— 那會讓本機每一筆沒碰過
+  // 的舊紀錄都贏過別台裝置真正較新的紀錄，離線久一點就會蓋掉別人的進度。
+  function mergeProgressData(local, remote, localPrevStamp) {
+    const localStamp = local._meta?.last_modified || '';
+    const remoteStamp = remote._meta?.last_modified || '';
+    const localFallback = localPrevStamp || localStamp;
+    const ts = (rec, docStamp) => rec?.updated_at || docStamp;
+    // 比對「內容」時要忽略 updated_at：時間戳不同不等於資料不同，
+    // 否則每次合併都會誤報一堆「被取代」，通知就失去意義了。
+    const recKey = r => { const { updated_at, ...rest } = r; return JSON.stringify(rest); };
+
+    let lostLocal = 0, lostRemote = 0;
+    const merged = { _meta: { ...(local._meta || {}) }, classes: {} };
+    merged._meta.last_modified = localStamp;   // 已經是剛蓋好的新時間戳
+
+    const classes = new Set([...Object.keys(local.classes || {}), ...Object.keys(remote.classes || {})]);
+    for (const cls of classes) {
+      const lc = local.classes?.[cls];
+      const rc = remote.classes?.[cls];
+      if (!lc) { merged.classes[cls] = rc; continue; }
+      if (!rc) { merged.classes[cls] = lc; continue; }
+
+      merged.classes[cls] = {};
+      for (const sem of ['semester1', 'semester2']) {
+        const ls = lc[sem], rs = rc[sem];
+        if (!ls) { merged.classes[cls][sem] = rs; continue; }
+        if (!rs) { merged.classes[cls][sem] = ls; continue; }
+
+        // shift_count 是純量，一樣比時間戳。舊資料沒有 shift_count_at → 視為最舊。
+        const lAt = ls.shift_count_at || '';
+        const rAt = rs.shift_count_at || '';
+        const out = {};
+        if (rAt > lAt) {
+          out.shift_count = rs.shift_count || 0;
+          if (rs.shift_count_at) out.shift_count_at = rs.shift_count_at;
+        } else {
+          out.shift_count = ls.shift_count || 0;
+          if (ls.shift_count_at) out.shift_count_at = ls.shift_count_at;
+        }
+
+        const byLesson = new Map();
+        for (const r of (ls.lessons || [])) byLesson.set(r.lesson, r);
+        for (const r of (rs.lessons || [])) {
+          const cur = byLesson.get(r.lesson);
+          if (!cur) { byLesson.set(r.lesson, r); continue; }
+          const lt = ts(cur, localFallback);
+          const rt = ts(r, remoteStamp);
+          const differs = recKey(cur) !== recKey(r);
+          if (rt > lt) {
+            if (differs) lostLocal++;                    // 遠端較新，本機這筆被取代
+            byLesson.set(r.lesson, r);
+          } else if (lt > rt) {
+            if (differs) lostRemote++;                   // 本機較新，遠端這筆被取代
+          } else if (differs) {
+            lostRemote++;                                // 平手時本機勝（＝老師手上這台）
+          }
+        }
+        out.lessons = [...byLesson.values()].sort((a, b) => a.lesson - b.lesson);
+        merged.classes[cls][sem] = out;
+      }
+    }
+    return { merged, lostLocal, lostRemote };
   }
 
   // ============ API: GIST ============
@@ -463,7 +584,9 @@
     if (names.length === 1 && files[names[0]]?.content) return files[names[0]];
     const jsonNames = names.filter(n => n.endsWith('.json'));
     if (jsonNames.length === 1 && files[jsonNames[0]]?.content) return files[jsonNames[0]];
-    throw new Error(`Gist 裡找不到 ${name}${names.length ? `（現有：${names.join('、')}）` : '（這個 Gist 是空的）'}`);
+    const e = new Error(`Gist 裡找不到 ${name}${names.length ? `（現有：${names.join('、')}）` : '（這個 Gist 是空的）'}`);
+    e.fatal = true;   // 檔名被改過，重試也不會好
+    throw e;
   }
 
   async function apiLoadPlan() {
@@ -487,7 +610,18 @@
     const file = pickGistFile(gist, 'progress.json');
     state.progress = JSON.parse(file.content);
     lsSet(LS_KEYS.progress, state.progress);
+    // 剛載入完，本機和遠端必然一致 —— 記下遠端時間戳，下次才知道本機有沒有未送出的東西
+    lsSet(LS_KEYS.lastRemoteStamp, state.progress._meta?.last_modified || null);
     return state.progress;
+  }
+
+  // 本機這份有沒有還沒送出去的修改？判斷依據是「上次成功同步時看到的遠端時間戳」
+  // 是否等於本機目前的時間戳。少了這個判斷，init() 會無條件用遠端覆蓋本機，
+  // 離線累積一整週的紀錄就在連上網開啟的瞬間消失，而且不會留下任何快照。
+  function localHasUnpushed() {
+    if (!state.progress) return false;
+    const seen = lsGet(LS_KEYS.lastRemoteStamp, null);
+    return seen === null || seen !== (state.progress._meta?.last_modified || null);
   }
 
   function initEmptyProgress() {
@@ -498,65 +632,134 @@
     return state.progress;
   }
 
-  // force = 使用者明確選擇要覆蓋（還原備份時），跳過衝突檢查
+  function httpError(status, prefix) {
+    const e = new Error(`${prefix}: ${status}`);
+    e.status = status;
+    return e;
+  }
+
+  // 401/403（token 失效）、404（gist 被刪）、422（格式被拒）重試一百次也不會好
+  function isRetryable(err) {
+    if (err?.fatal) return false;
+    const s = err?.status;
+    return !(s === 401 || s === 403 || s === 404 || s === 422);
+  }
+
+  // 指數退避。頁面重載時 init() 會直接再試一次，所以不必把退避狀態存起來。
+  function scheduleRetry() {
+    if (state.retryTimer) return;
+    state.retryDelay = Math.min(state.retryDelay ? state.retryDelay * 2 : 5000, 5 * 60 * 1000);
+    state.retryTimer = setTimeout(() => { state.retryTimer = null; saveProgressNow(); }, state.retryDelay);
+  }
+
+  // force = 使用者明確選擇要覆蓋（還原／重設／匯入），跳過合併
   async function apiSaveProgress(force) {
-    // 覆蓋遠端前，先確認遠端有沒有別台裝置寫過的新版本
-    if (state.progressGistId && !force) {
-      const remote = await fetchRemoteProgress();
-      const remoteStamp = remote?._meta?.last_modified;
-      const localStamp = state.progress?._meta?.last_modified;
-      if (remote && remoteStamp && remoteStamp !== localStamp) {
-        // 遠端比較新 —— 兩邊都先備份，然後拒絕覆蓋
-        takeSnapshot('被覆蓋的遠端版本', remote, true);
-        takeSnapshot('未同步的變更', buildProgressData(), true);
-        const err = new Error('另一台裝置有更新，未覆蓋。請到「設定 → 版本紀錄」選擇要保留的版本');
-        err.conflict = true;
-        throw err;
+    if (state.saveInFlight) { state.saveQueued = true; return; }
+    state.saveInFlight = true;
+    const seq = state.editSeq;
+    try {
+      // 存檔前本機那份文件的時間戳。buildProgressData() 會蓋掉它，先留下來給合併用。
+      const prevStamp = state.progress?._meta?.last_modified;
+      const data = buildProgressData();
+
+      // 先讀遠端。讀不到就不寫 —— 但仍完成本機提交（見下），否則離線時
+      // 編輯只存在記憶體，重新載入就沒了，比原本還糟。
+      let remote = null, readErr = null;
+      if (state.progressGistId) {
+        try { remote = await fetchRemoteProgressStrict(); }
+        catch (e) { readErr = e; }
       }
-    }
-    // force：覆蓋前的退路一定要留。預設的 10 分鐘間隔規則會在最需要它的時候把它跳過。
-    takeSnapshot('同步前', state.progress, true);
 
-    const data = buildProgressData();
-    state.progress = data;
-    lsSet(LS_KEYS.progress, data);
+      let outgoing = data;
+      if (!force && !readErr && remote?._meta?.last_modified) {
+        // 遠端有別台裝置寫過的東西 → 逐節合併，不再叫老師二選一。
+        // 這裡不比對 last_modified 是否相等：buildProgressData() 每次都蓋新時間戳，
+        // 兩邊永遠不會相等；沒有東西可合併時合併本來就是 no-op。
+        const { merged, lostLocal, lostRemote } = mergeProgressData(data, remote, prevStamp);
+        if (lostLocal || lostRemote) {
+          // 合併真的丟了東西 —— 這兩份一定要留下來，不受快照的 10 分鐘間隔限制
+          takeSnapshot(`合併前・本機（被雲端取代 ${lostLocal} 筆）`, data, true);
+          takeSnapshot(`合併前・雲端（被本機取代 ${lostRemote} 筆）`, remote, true);
+          toast(`合併：本機被取代 ${lostLocal} 筆、雲端被取代 ${lostRemote} 筆（已備份）`, 'warning');
+        }
+        outgoing = merged;
+      } else {
+        // 例行存檔前的備份走一般路徑就好。這裡若強制備份，每次存檔都留一版，
+        // 5 格快照環會被最近的幾次編輯填滿，反而救不回上週的版本。
+        takeSnapshot('同步前', state.progress);
+      }
 
-    if (!state.progressGistId) {
-      const res = await fetch(GIST_API, {
-        method: 'POST', headers: headers(),
-        body: JSON.stringify({
-          description: 'Data (Private)',
-          public: false,
-          files: { 'progress.json': { content: JSON.stringify(data, null, 2) } }
-        })
-      });
-      if (!res.ok) throw new Error(`建立 Gist 失敗: ${res.status}`);
-      const gist = await res.json();
-      state.progressGistId = gist.id;
-      lsSet(LS_KEYS.progressGistId, gist.id);
-    } else {
-      const res = await fetch(`${GIST_API}/${state.progressGistId}`, {
-        method: 'PATCH', headers: headers(),
-        body: JSON.stringify({
-          files: { 'progress.json': { content: JSON.stringify(data, null, 2) } }
-        })
-      });
-      if (!res.ok) throw new Error(`儲存失敗: ${res.status}`);
+      // 本機先提交再打網路：就算網路失敗，編輯也已經落在 localStorage。
+      // dirtyLessons 可以在這裡清掉 —— 時間戳已經寫進 outgoing，下一次重試
+      // 會從 state.progress 把 prev.updated_at 帶回來。
+      state.progress = outgoing;
+      lsSet(LS_KEYS.progress, outgoing);
+      if (force) lsSet(LS_KEYS.pendingForce, '1');
+      else localStorage.removeItem(LS_KEYS.pendingForce);
+      state.dirtyLessons.clear();
+
+      if (readErr) throw readErr;   // 讀不到遠端 → 不覆蓋，排隊重試
+
+      const content = JSON.stringify(outgoing, null, 2);
+      if (!state.progressGistId) {
+        const res = await fetch(GIST_API, {
+          method: 'POST', headers: headers(),
+          body: JSON.stringify({
+            description: 'Data (Private)',
+            public: false,
+            files: { 'progress.json': { content } }
+          })
+        });
+        if (!res.ok) throw httpError(res.status, '建立 Gist 失敗');
+        const gist = await res.json();
+        state.progressGistId = gist.id;
+        lsSet(LS_KEYS.progressGistId, gist.id);
+      } else {
+        const res = await fetch(`${GIST_API}/${state.progressGistId}`, {
+          method: 'PATCH', headers: headers(),
+          body: JSON.stringify({ files: { 'progress.json': { content } } })
+        });
+        if (!res.ok) throw httpError(res.status, '儲存失敗');
+      }
+
+      state.retryDelay = 0;
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+      lsSet(LS_KEYS.lastSync, new Date().toISOString());
+      lsSet(LS_KEYS.lastRemoteStamp, outgoing._meta.last_modified);
+      localStorage.removeItem(LS_KEYS.pendingForce);
+
+      // 存檔期間老師又改了東西的話，不要清 isDirty、也不要重建課堂 ——
+      // 重建會蓋掉他正在編輯的內容。讓排隊的那次存檔收尾。
+      if (state.editSeq === seq) {
+        state.isDirty = false;
+        generateLessonSlots();
+        renderAll();
+      }
+      renderSyncBanner();
+      return true;
+    } catch (e) {
+      if (isRetryable(e)) scheduleRetry();
+      throw e;
+    } finally {
+      state.saveInFlight = false;
+      if (state.saveQueued) { state.saveQueued = false; state.saveTimer = setTimeout(saveProgressNow, 0); }
     }
-    state.isDirty = false;
-    lsSet(LS_KEYS.lastSync, new Date().toISOString());
   }
 
-  // 立即儲存，不經 debounce。手機切離畫面時計時器會被凍結，必須直接呼叫這個
+  // 立即儲存。手機切離畫面時計時器會被凍結，所以 markDirty 的計時器等不到 ——
+  // visibilitychange 必須能直接呼叫這個函式把待存的內容送出去。
   function saveProgressNow() {
+    clearTimeout(state.saveTimer);
     apiSaveProgress()
-      .then(() => toast('已同步', 'success'))
-      .catch(e => e.conflict
-        ? toast(e.message, 'warning')                        // 是保護機制，不是失敗
-        : toast('同步失敗: ' + e.message, 'error'));
+      .then(ok => { if (ok) toast('已同步', 'success'); })   // 排隊中的那次不報成功
+      .catch(e => {
+        if (e.status === 401 || e.status === 403) { toast(`${e.message}——請到設定頁更新 Token`, 'error'); return; }
+        if (e.status === 404) { toast(`${e.message}——Gist 可能已被刪除`, 'error'); return; }
+        toast('同步失敗: ' + e.message, 'error');
+      })
+      .finally(() => renderSyncBanner());
   }
-
-  const saveProgress = debounce(saveProgressNow, 2000);
 
   // ============ DATA: SNAPSHOTS (自動版本備份) ============
   const SNAPSHOT_LIMIT = 5;
@@ -567,12 +770,27 @@
     return Array.isArray(list) ? list : [];
   }
 
-  // buildProgressData() 每次呼叫都會蓋上新的 last_modified，
-  // 去重時必須忽略它，否則同樣的內容會被當成不同版本重複備份
+  // buildProgressData() 每次呼叫都會蓋上新的 _meta.last_modified，逐節紀錄也會蓋
+  // updated_at / shift_count_at。去重時必須把這些時間戳全部剔除，否則每次存檔的內容鍵
+  // 都不一樣，5 格快照環會被自己洗掉。是「移除欄位」而非歸零 —— JSON.stringify 的鍵序
+  // 會影響比對結果。
   function contentKey(data) {
     const meta = { ...(data._meta || {}) };
     delete meta.last_modified;
-    return JSON.stringify({ ...data, _meta: meta });
+    const classes = {};
+    for (const [cls, c] of Object.entries(data.classes || {})) {
+      classes[cls] = {};
+      for (const [sem, s] of Object.entries(c || {})) {
+        if (!s || typeof s !== 'object') { classes[cls][sem] = s; continue; }
+        const { shift_count_at, ...rest } = s;
+        rest.lessons = (s.lessons || []).map(r => {
+          const { updated_at, ...rec } = r;
+          return rec;
+        });
+        classes[cls][sem] = rest;
+      }
+    }
+    return JSON.stringify({ ...data, _meta: meta, classes });
   }
 
   // payload 省略時，備份目前記憶體中的版本。force = 不受間隔限制
@@ -646,16 +864,15 @@
     toast('已清除備份', 'info');
   }
 
-  // 只讀取遠端目前內容，不改動任何狀態
-  async function fetchRemoteProgress() {
-    if (!state.progressGistId) return null;
-    try {
-      const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
-      if (!res.ok) return null;
-      const gist = await res.json();
-      const file = pickGistFile(gist, 'progress.json');
-      return JSON.parse(file.content);
-    } catch { return null; }
+  // 只讀取遠端目前內容，不改動任何狀態。
+  // 讀不到就丟錯，絕對不要回傳 null —— 呼叫端會把 null 當成「遠端沒有東西」
+  // 而直接覆蓋，保險機制就在最需要它的時候剛好失效。
+  async function fetchRemoteProgressStrict() {
+    const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
+    if (!res.ok) throw httpError(res.status, '讀取遠端進度失敗');
+    const gist = await res.json();
+    const file = pickGistFile(gist, 'progress.json');
+    return JSON.parse(file.content);
   }
 
   async function apiVerifyToken(token) {
@@ -748,12 +965,40 @@
     renderSidebar();
     renderCurrentView();
     updateHeaderDate();
+    renderSyncBanner();
   }
 
   // ============ UI: HEADER ============
   function updateHeaderDate() {
     const el = $('header-date');
     if (el) el.textContent = fmtFull(today());
+  }
+
+  // 未同步指示。toast 只活 3 秒，但「你的東西還沒上去」必須一直看得見 ——
+  // 之前存檔失敗只彈一次訊息，老師根本不會發現那節課沒記錄到。
+  let lastBannerState = null;
+  function renderSyncBanner() {
+    const el = $('sync-banner');
+    if (!el) return;
+    const pendingForce = lsGet(LS_KEYS.pendingForce, '') === '1';
+    const unsynced = state.isDirty || localHasUnpushed();
+    const key = `${unsynced}|${pendingForce}`;
+    if (key === lastBannerState) return;   // 別讓每次 markDirty 都重建 DOM
+    lastBannerState = key;
+
+    if (!unsynced) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    el.classList.remove('hidden');
+    el.innerHTML = pendingForce
+      ? `⚠ 還原／重設尚未同步 <button class="btn btn-sm btn-outline" id="btn-resend-force">立即覆蓋雲端</button>`
+      : `⚠ 尚未同步`;
+    $('btn-resend-force')?.addEventListener('click', async () => {
+      // 上次的明確覆蓋沒送出去，讓老師自己決定要不要現在覆蓋 ——
+      // 當初要求覆蓋的那份文件可能已經被別的裝置改過了，不能靜默自動重送。
+      try { await apiSaveProgress(true); toast('已覆蓋雲端', 'success'); }
+      catch (e) { toast('同步失敗: ' + e.message, 'error'); }
+      lastBannerState = null;
+      renderSyncBanner();
+    });
   }
 
   // ============ UI: SIDEBAR ============
@@ -1343,7 +1588,7 @@
     const l = findLesson(id);
     if (!l) return;
     l.done = !l.done;
-    markDirty();
+    markLessonDirty(id);
     renderAll();
     toast(l.done ? `✅ ${l.class} 第${l.period}節已完成` : `已取消完成`, l.done ? 'success' : 'info');
   }
@@ -1361,21 +1606,21 @@
     const l = findLesson(id);
     if (!l) return;
     l.topic = value;
-    markDirty();
+    markLessonDirty(id);
   }
 
   function updateNote(id, value) {
     const l = findLesson(id);
     if (!l) return;
     l.note = value;
-    markDirty();
+    markLessonDirty(id);
   }
 
   function postponeLesson(id) {
     const l = findLesson(id);
     if (!l || l.done) return;
     l.postponed = !l.postponed;
-    markDirty();
+    markLessonDirty(id);
     renderAll();
     toast(l.postponed ? `⏸ ${l.class} 第${l.period}節已延期` : `▶ ${l.class} 第${l.period}節已取消延期`, l.postponed ? 'warning' : 'success');
   }
@@ -1391,18 +1636,22 @@
     if (!state.progress.classes) state.progress.classes = {};
     if (!state.progress.classes[cls]) state.progress.classes[cls] = {};
     if (!state.progress.classes[cls][sem]) state.progress.classes[cls][sem] = {};
-    const currentShift = state.progress.classes[cls][sem].shift_count || 0;
+    const slot = state.progress.classes[cls][sem];
+    const currentShift = slot.shift_count || 0;
 
+    // 順延次數是純量，兩台裝置各按一次沒辦法逐節合併 —— 比時間戳決定誰新。
     if (currentShift > 0) {
       // Undo: decrement shift count
-      state.progress.classes[cls][sem].shift_count = currentShift - 1;
+      slot.shift_count = currentShift - 1;
+      slot.shift_count_at = stampNow();
       regenerateClassLessons(cls);
       markDirty();
       renderAll();
       toast(`↩ ${cls} 已取消一節順延（剩餘 ${currentShift - 1} 節）`, 'success');
     } else {
       // Shift: increment shift count
-      state.progress.classes[cls][sem].shift_count = currentShift + 1;
+      slot.shift_count = currentShift + 1;
+      slot.shift_count_at = stampNow();
       regenerateClassLessons(cls);
       markDirty();
       renderAll();
@@ -1531,7 +1780,7 @@
 
     $('modal-toggle-done').onclick = () => {
       l.done = !l.done;
-      markDirty();
+      markLessonDirty(l.id);
       overlay.classList.remove('open');
       renderAll();
       toast(l.done ? '✅ 已完成' : '已取消完成', l.done ? 'success' : 'info');
@@ -1543,7 +1792,7 @@
       const hwTopic = $('modal-hw-topic').value.trim();
       const hwDue = $('modal-hw-due').value;
       l.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
-      markDirty();
+      markLessonDirty(l.id);
       overlay.classList.remove('open');
       renderAll();
       toast('已儲存', 'success');
@@ -1583,7 +1832,7 @@
       const due = $('hw-due').value;
       const note = $('hw-note').value.trim();
       l.hw = topic ? { topic, due, note } : null;
-      markDirty();
+      markLessonDirty(l.id);
       overlay.classList.remove('open');
       renderCurrentView();
       toast('作業已更新', 'success');
@@ -1631,7 +1880,11 @@
   async function forceSync() {
     try {
       if (state.planGistId) await apiLoadPlan();
-      if (state.progressGistId) await apiLoadProgress();
+      if (state.progressGistId) {
+        // 本機有未送出的修改就先合併，不要直接讀遠端蓋掉它
+        if (localHasUnpushed()) await apiSaveProgress();
+        else await apiLoadProgress();
+      }
       generateLessonSlots();
       renderAll();
       toast('同步完成', 'success');
@@ -1812,7 +2065,15 @@
         // Background sync
         try {
           await apiLoadPlan();
-          if (state.progressGistId) await apiLoadProgress();
+          if (state.progressGistId) {
+            if (localHasUnpushed()) {
+              // 本機有還沒送出的修改 —— 先合併推上去，不能讓遠端直接蓋掉。
+              // apiSaveProgress 會先讀遠端再逐節合併，這條路本來就是安全的。
+              await apiSaveProgress();
+            } else {
+              await apiLoadProgress();
+            }
+          }
           generateLessonSlots();
           renderAll();
         } catch { }
@@ -1877,12 +2138,25 @@
       }
 
       if (!state.token || !state.plan) return;
-      if (state.isDirty) return;   // 還有沒同步的修改，先不要被遠端覆蓋
+      // 還有沒同步的修改就先不要被遠端覆蓋，改成把它送出去。
+      // 只檢查 isDirty 不夠 —— 它只涵蓋「這個工作階段」的編輯，
+      // 上次沒送出去的東西要看時間戳（localHasUnpushed）。這裡同時也是
+      // 「回到畫面上就重試一次」的入口，離線時失敗的存檔會在這時候補上。
+      if (state.isDirty || localHasUnpushed()) { saveProgressNow(); return; }
       try {
         if (state.progressGistId) await apiLoadProgress();
         generateLessonSlots();
         renderAll();
       } catch { }
+    });
+
+    // 恢復連線就立刻再試一次，不必等退避計時器跑完
+    window.addEventListener('online', () => {
+      if (!state.isDirty && !localHasUnpushed()) return;
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+      state.retryDelay = 0;
+      saveProgressNow();
     });
 
     // Register SW

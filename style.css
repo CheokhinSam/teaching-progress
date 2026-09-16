@@ -104,6 +104,21 @@ body {
   color: var(--gray-500);
 }
 
+/* 未同步指示。toast 只活 3 秒，但「你的東西還沒上去」必須一直看得見。 */
+.sync-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--warning-light);
+  color: #92400e;
+  white-space: nowrap;
+}
+
+.sync-banner .btn { padding: 2px 8px; font-size: 11px; }
+
 .app-body {
   display: flex;
   min-height: calc(100vh - 57px);
@@ -869,6 +884,8 @@ textarea { resize: vertical; min-height: 80px; }
 @media (max-width: 480px) {
   .app-header .logo { font-size: 16px; }
   .app-header .date-display { display: none; }
+  /* 日期可以藏，但未同步指示不行 —— 它是要老師採取行動的 */
+  .sync-banner { font-size: 11px; padding: 3px 8px; }
 
   .lesson-actions { flex-wrap: wrap; }
   .lesson-actions .btn { flex: 1; justify-content: center; }
