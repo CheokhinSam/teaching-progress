@@ -1550,6 +1550,21 @@
     renderWeek();
   }
 
+  // 把課堂按日期分組，同一天之內照上課時間排。
+  // 行事曆原本只分組、沒排序，而外層是照班級跑的，所以格子裡看起來是
+  // 「先按班級、再按節次」—— 跟今日／本週兩邊的順序對不起來。
+  function groupByDateSorted(lessons) {
+    const byDate = {};
+    for (const l of lessons) {
+      if (!byDate[l.date]) byDate[l.date] = [];
+      byDate[l.date].push(l);
+    }
+    for (const list of Object.values(byDate)) {
+      list.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    }
+    return byDate;
+  }
+
   function renderCalendar() {
     const container = $('calendar-content');
     const label = $('cal-month-label');
@@ -1611,11 +1626,7 @@
     }
 
     // Group lessons by date
-    const lessonsByDate = {};
-    for (const l of allLessons) {
-      if (!lessonsByDate[l.date]) lessonsByDate[l.date] = [];
-      lessonsByDate[l.date].push(l);
-    }
+    const lessonsByDate = groupByDateSorted(allLessons);
 
     const td = fmtDate(today());
     let html = '<div class="cal-month-grid">';
