@@ -18,7 +18,6 @@
     lastSync: 'tp_last_sync',
     selectedClasses: 'tp_selected_classes',
     currentView: 'tp_current_view',
-    expandedLessons: 'tp_expanded',
     snapshots: 'tp_snapshots',
     // 本機最後一次看到的遠端 _meta.last_modified。用來判斷本機這份是否有
     // 還沒送出去的修改 —— 沒有的話，載入時才可以讓遠端覆蓋。
@@ -37,7 +36,6 @@
     lessons: {},        // { className: [lesson, ...] }
     currentView: 'today',
     selectedClasses: new Set(),
-    expandedLessons: new Set(),
     isDirty: false,
     saveTimer: null,
     // 老師在這一次工作階段碰過的課堂 id。只用來決定存檔時要蓋哪些 updated_at，
@@ -503,19 +501,9 @@
     pruneStaleUiState();
   }
 
-  // 展開狀態與側邊欄篩選都存在 localStorage。課堂會因為順延、學期日期調整而重新產生，
-  // 不修剪的話那些 id 會永遠留在那裡，一年下來累積幾千筆沒有意義的字串。
+  // 側邊欄篩選存在 localStorage。班級會因為換了 plan 而不存在，
+  // 不修剪的話會留著永遠選不到東西的篩選條件。
   function pruneStaleUiState() {
-    const live = new Set();
-    for (const lessons of Object.values(state.lessons)) {
-      for (const l of lessons) live.add(l.id);
-    }
-    let changed = false;
-    for (const id of state.expandedLessons) {
-      if (!live.has(id)) { state.expandedLessons.delete(id); changed = true; }
-    }
-    if (changed) lsSet(LS_KEYS.expandedLessons, [...state.expandedLessons]);
-
     // 班級也可能因為換了 plan 而不存在了，一起清掉，否則側邊欄會篩選到空集合
     const classes = new Set(Object.keys(state.plan?.schedule || {}));
     const before = state.selectedClasses.size;
@@ -878,7 +866,9 @@
         generateLessonSlots();
         renderAll();
       }
-      renderSyncBanner();
+      // renderAll 裡面已經呼叫過 renderSyncBanner；這裡改用 flashSaved，
+      // 存檔期間還有新編輯（isDirty 仍為真）時它會照樣顯示「尚未同步」。
+      flashSaved();
       return true;
     } catch (e) {
       if (isRetryable(e)) scheduleRetry();
@@ -1131,17 +1121,27 @@
   // 未同步指示。toast 只活 3 秒，但「你的東西還沒上去」必須一直看得見 ——
   // 之前存檔失敗只彈一次訊息，老師根本不會發現那節課沒記錄到。
   let lastBannerState = null;
+  let savedFlashUntil = 0;
+  let savedFlashTimer = null;
   function renderSyncBanner() {
     const el = $('sync-banner');
     if (!el) return;
     const pendingForce = lsGet(LS_KEYS.pendingForce, '') === '1';
     const unsynced = state.isDirty || localHasUnpushed();
-    const key = `${unsynced}|${pendingForce}`;
+    const flashing = !unsynced && Date.now() < savedFlashUntil;
+    const key = `${unsynced}|${pendingForce}|${flashing}`;
     if (key === lastBannerState) return;   // 別讓每次 markDirty 都重建 DOM
     lastBannerState = key;
 
-    if (!unsynced) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    if (!unsynced && !flashing) { el.classList.add('hidden'); el.innerHTML = ''; return; }
     el.classList.remove('hidden');
+
+    if (flashing) {
+      el.classList.add('saved');
+      el.textContent = '✓ 已儲存';
+      return;
+    }
+    el.classList.remove('saved');
     el.innerHTML = pendingForce
       ? `⚠ 還原／重設尚未同步 <button class="btn btn-sm btn-outline" id="btn-resend-force">立即覆蓋雲端</button>`
       : `⚠ 尚未同步`;
@@ -1153,6 +1153,19 @@
       lastBannerState = null;
       renderSyncBanner();
     });
+  }
+
+  // 存檔成功後讓橫幅短暫變成「已儲存」再自己消失。老師改完一個東西最想知道的
+  // 就是到底存了沒 —— 與其讓他盯著那個「尚未同步」猜，不如直接講。
+  function flashSaved() {
+    savedFlashUntil = Date.now() + 2500;
+    lastBannerState = null;
+    renderSyncBanner();
+    clearTimeout(savedFlashTimer);
+    savedFlashTimer = setTimeout(() => {
+      lastBannerState = null;
+      renderSyncBanner();
+    }, 2600);
   }
 
   // ============ UI: SIDEBAR ============
@@ -1260,18 +1273,16 @@
       </div>`;
 
     if (dayLessons.length === 0) {
-      container.innerHTML = postponedHtml + `
+      paintLessons(container, postponedHtml + `
         <div class="empty-state">
           <div class="icon">📅</div>
           <h3>${state.dayOffset === 0 ? '今天沒有課堂' : '當天沒有課堂'}</h3>
           <p>切換到「本週課表」查看本週安排</p>
-        </div>`;
-      bindLessonCardEvents(container);
+        </div>`);
       return;
     }
 
-    container.innerHTML = postponedHtml + dayLessons.map(l => renderLessonCard(l)).join('');
-    bindLessonCardEvents(container);
+    paintLessons(container, postponedHtml + dayLessons.map(l => renderLessonCard(l)).join(''));
   }
 
   // ============ UI: WEEK VIEW ============
@@ -1329,8 +1340,7 @@
       html += lessons.map(l => renderLessonCard(l)).join('');
       html += `</div>`;
     }
-    container.innerHTML = html;
-    bindLessonCardEvents(container);
+    paintLessons(container, html);
   }
 
   // ============ UI: LESSON CARD ============
@@ -1343,17 +1353,19 @@
     else if (ld < td && !l.postponed) statusClass = 'overdue';
     if (l.postponed) statusClass += ' shifted';
 
-    const isExpanded = state.expandedLessons.has(l.id);
     const stats = getClassStats(l.class);
     const statusBadge = stats.status === 'ok' ? '' : `<span class="badge ${stats.status === 'behind' ? 'badge-behind' : 'badge-ahead'}" style="margin-left:8px">${stats.status === 'behind' ? '落後' : '領先'}</span>`;
 
     const shiftCount = state.progress?.classes?.[l.class]?.[l.semester]?.shift_count || 0;
 
+    // 主題與備註一律渲染成真的輸入框，只是平時靠 CSS 裝成一行文字（.inline-edit）。
+    // 以前要按「展開」才生得出輸入框，改一個欄位得先點兩下；現在點一下就能打，
+    // 也不必再維護「哪幾張卡是展開的」那份狀態。
     return `
       <div class="lesson-card ${statusClass}" data-id="${l.id}" data-class="${escHtml(l.class)}">
         <div class="lesson-header">
           <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
-            <button class="check-btn ${l.done ? 'checked' : ''}" data-id="${l.id}" title="打卡">✓</button>
+            <button class="check-btn ${l.done ? 'checked' : ''}" data-id="${l.id}" title="標記這節上完了">✓</button>
             <div style="min-width:0">
               <div class="lesson-class">${escHtml(l.class)}${statusBadge}</div>
               <div class="lesson-meta">
@@ -1363,36 +1375,54 @@
               </div>
             </div>
           </div>
-          <button class="btn btn-sm btn-outline expand-btn" data-id="${l.id}">
-            ${isExpanded ? '收合' : '展開'}
-          </button>
         </div>
-        <div class="lesson-topic" data-id="${l.id}">
-          ${isExpanded
-            ? `<input type="text" value="${escHtml(l.topic)}" data-field="topic" data-id="${l.id}" placeholder="輸入教學主題">`
-            : `<span>${escHtml(l.topic)}</span>`
-          }
+        <div class="lesson-topic">
+          <input class="inline-edit" type="text" data-field="topic" data-id="${escHtml(l.id)}"
+                 value="${escHtml(l.topic)}" placeholder="輸入教學主題" aria-label="教學主題">
         </div>
-        ${l.note || isExpanded ? `
-          <div class="lesson-note" data-id="${l.id}">
-            ${isExpanded
-              ? `<textarea data-field="note" data-id="${l.id}" placeholder="課後備註...">${escHtml(l.note)}</textarea>`
-              : `<span>${l.note ? '📝 ' + escHtml(l.note) : '點擊新增備註...'}</span>`
-            }
-          </div>` : ''}
+        <div class="lesson-note">
+          <textarea class="inline-edit" data-field="note" data-id="${escHtml(l.id)}" rows="1"
+                    placeholder="點此寫課後備註…" aria-label="課後備註">${escHtml(l.note)}</textarea>
+        </div>
         ${l.hw ? `<div class="lesson-hw">📋 ${escHtml(typeof l.hw === 'string' ? l.hw : l.hw.topic || '')}</div>` : ''}
-        ${isExpanded ? `
-          <div class="lesson-actions">
-            <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}> ${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
-            <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
-            <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
-          </div>` : ''}
+        <div class="lesson-actions">
+          <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}>${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
+          <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
+          <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
+        </div>
       </div>`;
+  }
+
+  // textarea 不會自己長高。備註是課後才補的，常越寫越長，固定高度會冒出捲軸。
+  // 隱藏中的元素 scrollHeight 是 0，跳過才不會把它壓成 0 高。
+  function autoGrow(ta) {
+    ta.style.height = 'auto';
+    if (ta.scrollHeight) ta.style.height = ta.scrollHeight + 'px';
   }
 
   function escHtml(s) {
     if (!s) return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // 課堂清單是整批 innerHTML 重建的。如果重建的當下老師正好在打字，那個欄位會
+  // 連同還沒送出的字一起被換掉。這裡在重建前記下是哪一節的哪個欄位、游標停在
+  // 第幾個字，重建後還原。（值本身已經由 input 事件即時寫回 state。）
+  function paintLessons(container, html) {
+    const ae = document.activeElement;
+    const editing = ae && container.contains(ae) && ae.dataset && ae.dataset.field ? ae : null;
+    const start = editing ? editing.selectionStart : null;
+    const end = editing ? editing.selectionEnd : null;
+
+    container.innerHTML = html;
+    bindLessonCardEvents(container);
+
+    if (!editing) return;
+    const next = container.querySelector(
+      `[data-field="${editing.dataset.field}"][data-id="${editing.dataset.id}"]`);
+    if (!next) return;   // 那一節被別台裝置改掉了，不硬把焦點塞回去
+    next.focus();
+    if (typeof start === 'number') { try { next.setSelectionRange(start, end); } catch { } }
   }
 
   function bindLessonCardEvents(container) {
@@ -1401,9 +1431,6 @@
         e.stopPropagation();
         toggleDone(btn.dataset.id);
       });
-    });
-    container.querySelectorAll('.expand-btn').forEach(btn => {
-      btn.addEventListener('click', () => toggleExpand(btn.dataset.id));
     });
     container.querySelectorAll('.post-btn').forEach(btn => {
       btn.addEventListener('click', () => postponeLesson(btn.dataset.id));
@@ -1414,18 +1441,29 @@
     container.querySelectorAll('.hw-btn').forEach(btn => {
       btn.addEventListener('click', () => openHwModal(btn.dataset.id));
     });
+
+    // 每按一鍵就寫回 state，不等失焦。這不只是「早點存」—— apiSaveProgress
+    // 收尾時靠 editSeq 判斷要不要重建課堂，而那個判斷只有在打字會遞增 editSeq
+    // 時才擋得住「存檔完成把老師正在打的欄位重建掉」。綁 change 的話打字期間
+    // editSeq 不動，防護形同虛設。
     container.querySelectorAll('input[data-field="topic"]').forEach(inp => {
-      inp.addEventListener('change', () => updateTopic(inp.dataset.id, inp.value));
+      inp.addEventListener('input', () => updateTopic(inp.dataset.id, inp.value));
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === 'Escape') inp.blur();
+      });
     });
     container.querySelectorAll('textarea[data-field="note"]').forEach(ta => {
-      ta.addEventListener('change', () => updateNote(ta.dataset.id, ta.value));
-    });
-    container.querySelectorAll('.lesson-note').forEach(el => {
-      if (!el.querySelector('textarea')) {
-        el.addEventListener('click', () => {
-          toggleExpand(el.dataset.id, true);
-        });
-      }
+      autoGrow(ta);
+      // 聚焦時重量一次：字型載入完成或視窗大小改變後，原本算好的高度會不準
+      ta.addEventListener('focus', () => autoGrow(ta));
+      ta.addEventListener('input', () => {
+        autoGrow(ta);
+        updateNote(ta.dataset.id, ta.value);
+      });
+      // 備註可以換行，所以 Enter 是換行、要按 Esc 或 ⌘/Ctrl+Enter 才收起來
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) ta.blur();
+      });
     });
   }
 
@@ -1797,17 +1835,6 @@
     markLessonDirty(id);
     renderAll();
     toast(l.done ? `✅ ${l.class} 第${l.period}節已完成` : `已取消完成`, l.done ? 'success' : 'info');
-  }
-
-  function toggleExpand(id, forceOpen) {
-    if (forceOpen || !state.expandedLessons.has(id)) {
-      state.expandedLessons.add(id);
-    } else {
-      state.expandedLessons.delete(id);
-    }
-    // 之前只寫進記憶體，重新載入就全部收合 —— 老師正在補進度的時候特別惱人
-    lsSet(LS_KEYS.expandedLessons, [...state.expandedLessons]);
-    renderCurrentView();
   }
 
   function updateTopic(id, value) {
@@ -2273,8 +2300,6 @@
     state.progressGistId = lsGet(LS_KEYS.progressGistId, '');
     state.currentView = lsGet(LS_KEYS.currentView, 'today');
     state.selectedClasses = new Set(lsGet(LS_KEYS.selectedClasses, []));
-    const expanded = lsGet(LS_KEYS.expandedLessons, []);
-    state.expandedLessons = new Set(expanded);
 
     // Try cached data first
     const cachedPlan = lsGet(LS_KEYS.plan);
