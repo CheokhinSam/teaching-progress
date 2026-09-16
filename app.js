@@ -655,6 +655,11 @@
   // 離線累積一整週的紀錄就在連上網開啟的瞬間消失，而且不會留下任何快照。
   function localHasUnpushed() {
     if (!state.progress) return false;
+    // 還沒有進度 Gist ＝ 還沒有遠端可以「不同步」。首次使用時 setup 畫面就是叫人
+    // 把這個欄位留空（系統自動建立），而那條路徑會經過 initEmptyProgress() 留下一份
+    // 有 last_modified 的空文件、卻沒有 lastRemoteStamp —— 少了這一行，這裡會永遠
+    // 判定為 true，而 init() 又因為沒有 gist id 而不會嘗試存檔，橫幅就再也消失不了。
+    if (!state.progressGistId) return false;
     const seen = lsGet(LS_KEYS.lastRemoteStamp, null);
     return seen === null || seen !== (state.progress._meta?.last_modified || null);
   }
