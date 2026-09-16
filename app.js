@@ -178,7 +178,21 @@
   }
 
   // ============ DATA: TEACHING CONTENT FLATTENING ============
+  // 這個函式每次都要把整個學期的內容陣列重建一遍。記住上一次的 plan 物件身分，
+  // plan 換了就整批失效 —— 比在每個會改 plan 的地方手動清快取可靠，不會漏。
+  // 回傳的陣列只被讀取（課堂物件是另外建的），沒有共用參照的問題。
+  let _flatCache = new Map();
+  let _flatCachePlan;
   function flattenContent(className, semester) {
+    if (_flatCachePlan !== state.plan) { _flatCache.clear(); _flatCachePlan = state.plan; }
+    const key = `${className}|${semester}`;
+    if (_flatCache.has(key)) return _flatCache.get(key);
+    const result = flattenContentUncached(className, semester);
+    _flatCache.set(key, result);
+    return result;
+  }
+
+  function flattenContentUncached(className, semester) {
     const tc = state.plan?.teaching_content;
     if (!tc) return [];
     const level = className.startsWith('高一') ? '高一乙'
@@ -384,6 +398,27 @@
 
     state.lessons = allLessons;
     mergeProgress();
+    pruneStaleUiState();
+  }
+
+  // 展開狀態與側邊欄篩選都存在 localStorage。課堂會因為順延、學期日期調整而重新產生，
+  // 不修剪的話那些 id 會永遠留在那裡，一年下來累積幾千筆沒有意義的字串。
+  function pruneStaleUiState() {
+    const live = new Set();
+    for (const lessons of Object.values(state.lessons)) {
+      for (const l of lessons) live.add(l.id);
+    }
+    let changed = false;
+    for (const id of state.expandedLessons) {
+      if (!live.has(id)) { state.expandedLessons.delete(id); changed = true; }
+    }
+    if (changed) lsSet(LS_KEYS.expandedLessons, [...state.expandedLessons]);
+
+    // 班級也可能因為換了 plan 而不存在了，一起清掉，否則側邊欄會篩選到空集合
+    const classes = new Set(Object.keys(state.plan?.schedule || {}));
+    const before = state.selectedClasses.size;
+    for (const c of state.selectedClasses) if (!classes.has(c)) state.selectedClasses.delete(c);
+    if (state.selectedClasses.size !== before) lsSet(LS_KEYS.selectedClasses, [...state.selectedClasses]);
   }
 
   // ============ DATA: MERGE PROGRESS INTO LESSONS ============
@@ -905,7 +940,17 @@
   }
 
   // ============ DATA: CLASS STATS ============
+  // 每一張課堂卡片都會問一次，而每次都要掃過整班的課堂 —— 一次 render 等於
+  // O(卡片數 × 課堂數)。同一個 render 週期內結果不會變，所以一週期算一次就好。
+  let _statsCache = new Map();
   function getClassStats(className) {
+    if (_statsCache.has(className)) return _statsCache.get(className);
+    const result = computeClassStats(className);
+    _statsCache.set(className, result);
+    return result;
+  }
+
+  function computeClassStats(className) {
     const lessons = state.lessons[className] || [];
     const td = today();
     const total = lessons.length;
@@ -952,6 +997,7 @@
 
   // ============ UI: RENDER ALL ============
   function renderCurrentView() {
+    _statsCache.clear();   // 統計在同一個 render 週期內是固定的（見 getClassStats）
     switch (state.currentView) {
       case 'today': renderToday(); break;
       case 'week': renderWeek(); break;
@@ -962,6 +1008,7 @@
   }
 
   function renderAll() {
+    _statsCache.clear();
     renderSidebar();
     renderCurrentView();
     updateHeaderDate();
@@ -1017,7 +1064,7 @@
       const info = state.plan.schedule[cls];
       if (info.level !== currentLevel) {
         currentLevel = info.level;
-        html += `<h3>${currentLevel}</h3>`;
+        html += `<h3>${escHtml(currentLevel)}</h3>`;
       }
       const stats = getClassStats(cls);
       const badgeClass = stats.status === 'ok' ? 'badge-ok' : stats.status === 'behind' ? 'badge-behind' : 'badge-ahead';
@@ -1072,17 +1119,51 @@
     $('stat-overdue').textContent = totalOverdue;
     $('stat-today').textContent = `${dayDone}/${dayLessons.length}`;
 
+    // 已延期清單。「延期」是把課堂挪走，但延期之後就再也沒有地方列出來 ——
+    // 老師標記完就忘了補。這裡只列已經過去的（今天的還沒到，不必提醒）。
+    const postponed = [];
+    for (const [cls, lessons] of Object.entries(state.lessons)) {
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
+      for (const l of lessons) {
+        if (l.postponed && !l.done && parseDate(l.date) <= td) postponed.push(l);
+      }
+    }
+    postponed.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+    const postponedHtml = postponed.length === 0 ? '' : `
+      <div class="postponed-panel">
+        <div class="postponed-head">⏸ 已延期待補（${postponed.length} 節）</div>
+        ${postponed.map(l => `
+          <div class="lesson-card shifted">
+            <div class="lesson-header">
+              <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+                <div style="min-width:0">
+                  <div class="lesson-class">${escHtml(l.class)}</div>
+                  <div class="lesson-meta">
+                    <span>第${l.period}節</span>
+                    <span>${l.dayOfWeek} ${l.time}</span>
+                    <span>原定 ${fmtDisplay(l.date)}</span>
+                  </div>
+                </div>
+              </div>
+              <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}">▶ 取消延期</button>
+            </div>
+            <div class="lesson-topic"><span>${escHtml(l.topic)}</span></div>
+          </div>`).join('')}
+      </div>`;
+
     if (dayLessons.length === 0) {
-      container.innerHTML = `
+      container.innerHTML = postponedHtml + `
         <div class="empty-state">
           <div class="icon">📅</div>
           <h3>${state.dayOffset === 0 ? '今天沒有課堂' : '當天沒有課堂'}</h3>
           <p>切換到「本週課表」查看本週安排</p>
         </div>`;
+      bindLessonCardEvents(container);
       return;
     }
 
-    container.innerHTML = dayLessons.map(l => renderLessonCard(l, true)).join('');
+    container.innerHTML = postponedHtml + dayLessons.map(l => renderLessonCard(l)).join('');
     bindLessonCardEvents(container);
   }
 
@@ -1138,7 +1219,7 @@
       html += `<div style="font-size:14px;font-weight:600;color:${isToday ? 'var(--primary)' : 'var(--gray-600)'};margin-bottom:8px;padding-left:4px">
         ${fmtDisplay(date)}${isToday ? ' (今天)' : ''}
       </div>`;
-      html += lessons.map(l => renderLessonCard(l, false)).join('');
+      html += lessons.map(l => renderLessonCard(l)).join('');
       html += `</div>`;
     }
     container.innerHTML = html;
@@ -1157,7 +1238,7 @@
 
     const isExpanded = state.expandedLessons.has(l.id);
     const stats = getClassStats(l.class);
-    const statusBadge = stats.status === 'ok' ? '' : `<span class="badge ${stats.status === 'behind' ? 'badge-behind' : 'badge-ahead'}" style="font-size:11px;margin-left:8px">${stats.status === 'behind' ? '落後' : '領先'}</span>`;
+    const statusBadge = stats.status === 'ok' ? '' : `<span class="badge ${stats.status === 'behind' ? 'badge-behind' : 'badge-ahead'}" style="margin-left:8px">${stats.status === 'behind' ? '落後' : '領先'}</span>`;
 
     const shiftCount = state.progress?.classes?.[l.class]?.[l.semester]?.shift_count || 0;
 
@@ -1255,7 +1336,7 @@
       html += `
         <div class="compare-card" data-class="${escHtml(cls)}">
           <div class="class-name">${escHtml(cls)}</div>
-          <div class="class-level">${state.plan.schedule[cls].level} · ${state.plan.schedule[cls].periods_per_week}堂/週</div>
+          <div class="class-level">${escHtml(state.plan.schedule[cls].level)} · ${state.plan.schedule[cls].periods_per_week}堂/週</div>
           <div class="progress-bar">
             <div class="progress-bar-fill" style="width:${stats.pct}%;background:${barColor}"></div>
           </div>
@@ -1413,7 +1494,7 @@
       html += `<span class="cal-day-num">${d}</span>`;
       if (isHol) {
         const hol = getHolidayName(dateStr);
-        html += `<span class="cal-holiday-tag">${hol || '假期'}</span>`;
+        html += `<span class="cal-holiday-tag">${escHtml(hol) || '假期'}</span>`;
       }
       html += `</div>`;
 
@@ -1517,17 +1598,17 @@
         <h3>Token 設定</h3>
         <div class="form-group">
           <label>GitHub Personal Access Token</label>
-          <input type="password" id="settings-token" value="${state.token}" placeholder="ghp_xxxxxxxxxxxx">
+          <input type="password" id="settings-token" value="${escHtml(state.token)}" placeholder="ghp_xxxxxxxxxxxx">
           <div class="hint">需要 <code>gist</code> 權限。<a href="https://github.com/settings/tokens/new?scopes=gist&description=App" target="_blank">點此建立 Token</a></div>
         </div>
         <div class="form-group">
           <label>課程設定 Gist ID</label>
-          <input type="text" id="settings-plan-gist" value="${state.planGistId}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+          <input type="text" id="settings-plan-gist" value="${escHtml(state.planGistId)}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
           <div class="hint">包含 plan.json 的 Secret Gist ID</div>
         </div>
         <div class="form-group">
           <label>進度紀錄 Gist ID</label>
-          <input type="text" id="settings-progress-gist" value="${state.progressGistId}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+          <input type="text" id="settings-progress-gist" value="${escHtml(state.progressGistId)}" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
           <div class="hint">包含 progress.json 的 Secret Gist ID（多裝置請輸入同一個 ID）</div>
         </div>
         <button class="btn btn-primary" id="btn-save-settings">儲存設定</button>
@@ -1599,6 +1680,8 @@
     } else {
       state.expandedLessons.delete(id);
     }
+    // 之前只寫進記憶體，重新載入就全部收合 —— 老師正在補進度的時候特別惱人
+    lsSet(LS_KEYS.expandedLessons, [...state.expandedLessons]);
     renderCurrentView();
   }
 
@@ -1842,22 +1925,39 @@
 
   // ============ SETTINGS ACTIONS ============
   async function saveSettings() {
-    const token = $('settings-token')?.value.trim();
-    const gistId = $('settings-plan-gist')?.value.trim();
-    const progressGistId = $('settings-progress-gist')?.value.trim();
-    if (token) {
-      state.token = token;
-      lsSet(LS_KEYS.token, token);
-    }
-    if (gistId) {
-      state.planGistId = gistId;
-      lsSet(LS_KEYS.planGistId, gistId);
-    }
-    if (progressGistId) {
+    const token = $('settings-token')?.value.trim() ?? '';
+    const gistId = $('settings-plan-gist')?.value.trim() ?? '';
+    const progressGistId = $('settings-progress-gist')?.value.trim() ?? '';
+
+    // 清空 Gist ID 會讓下次存檔另建一個新的 gist，舊的那份留在那裡沒人記得 ——
+    // 這是老師清得掉但找不回來的東西，先問一聲。換 gist 請直接貼新的 ID。
+    const clearing = [];
+    if (!gistId && state.planGistId) clearing.push('課程設定 Gist');
+    if (!progressGistId && state.progressGistId) clearing.push('進度紀錄 Gist');
+    if (clearing.length && !confirm(
+      `即將清空：${clearing.join('、')}\n\n`
+      + '下次存檔會另外建立一個新的 Gist。舊的那份不會被刪除，但也不會再被使用。\n'
+      + '如果只是想換成另一個 Gist，請直接貼上新的 ID，不要留空。\n\n確定要清空嗎？'
+    )) return;
+
+    // 之前是「有填才寫」，填錯了只能覆蓋、清不掉 —— 現在一律照欄位內容走
+    const tokenCleared = !token && !!state.token;
+    state.token = token;
+    lsSet(LS_KEYS.token, token);
+    state.planGistId = gistId;
+    lsSet(LS_KEYS.planGistId, gistId);
+
+    if (progressGistId !== state.progressGistId) {
+      // 換了進度 gist，之前記下的遠端時間戳就不是這一本的 —— 留著會讓
+      // localHasUnpushed() 誤判「本機沒有未送出的東西」，載入時直接把本機蓋掉。
       state.progressGistId = progressGistId;
       lsSet(LS_KEYS.progressGistId, progressGistId);
+      localStorage.removeItem(LS_KEYS.lastRemoteStamp);
     }
-    toast('設定已儲存', 'success');
+
+    renderAll();
+    if (tokenCleared) toast('設定已儲存 —— Token 已清空，同步會停用', 'warning');
+    else toast('設定已儲存', 'success');
   }
 
   async function testConnection() {

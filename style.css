@@ -167,13 +167,19 @@ body {
   font-weight: 600;
 }
 
-.class-item .badge {
-  margin-left: auto;
+/* 基礎樣式要在 .badge 本身。之前只寫在 .class-item .badge，所以課堂卡片與
+   modal 裡的徽章只是一段有顏色的文字（卡片靠 inline style 補救，modal 完全沒補）。 */
+.badge {
+  display: inline-block;
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 10px;
   font-weight: 500;
+  white-space: nowrap;
 }
+
+/* 側邊欄的徽章推到最右邊。樣式本身在 .badge，這裡只負責位置。 */
+.class-item .badge { margin-left: auto; }
 
 .badge-ok { background: var(--success-light); color: #065f46; }
 .badge-behind { background: var(--danger-light); color: #991b1b; }
@@ -252,6 +258,29 @@ body {
 .lesson-card.today { border-left-color: var(--primary); }
 .lesson-card.overdue { border-left-color: var(--danger); }
 .lesson-card.shifted { border-left-color: var(--warning); opacity: 0.7; }
+
+/* 已延期待補清單。延期之後就沒有地方再列出來，老師標記完就忘了補。 */
+.postponed-panel {
+  margin-bottom: 20px;
+  padding: 12px;
+  background: var(--warning-light);
+  border-radius: 10px;
+}
+
+.postponed-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+  margin-bottom: 8px;
+}
+
+.postponed-panel .lesson-card {
+  background: white;
+  margin-bottom: 8px;
+  opacity: 1;   /* 這裡是要老師採取行動的，不要跟著 .shifted 一起淡化 */
+}
+
+.postponed-panel .lesson-card:last-child { margin-bottom: 0; }
 
 .lesson-header {
   display: flex;
@@ -368,6 +397,8 @@ body {
   background: var(--warning);
   color: white;
 }
+
+.btn-warning:hover { background: #d97706; }
 
 .btn-sm {
   padding: 5px 10px;
@@ -872,7 +903,12 @@ textarea { resize: vertical; min-height: 80px; }
   .stat-card .stat-number { font-size: 22px; }
 
   .comparison-grid { grid-template-columns: 1fr; }
-  .calendar-grid { grid-template-columns: 1fr; }
+  /* 原本寫的是 .calendar-grid，這個類別不存在，所以這條規則從來沒生效過。
+     實際類別是 .cal-month-grid（週一到週五 5 欄）。窄螢幕上把格子收緊，
+     而不是改成單欄 —— 單欄會變成二十幾格的長條清單，反而看不出一個月的樣子。 */
+  .cal-month-grid { gap: 4px; }
+  .cal-day { min-height: 84px; padding: 5px; }
+  .cal-lesson { font-size: 10px; }
 
   .modal { max-width: 100%; margin: 10px; }
 
