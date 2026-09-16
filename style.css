@@ -688,6 +688,47 @@ textarea { resize: vertical; min-height: 80px; }
   border-radius: 50%;
 }
 
+.cal-legend-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--gray-200);
+  margin: 0 2px;
+}
+
+/* 測驗／考試／功課截止。刻意做得比課堂小一號 —— 它們是提醒，
+   不該跟「今天要上哪幾節」搶同樣的視覺重量。 */
+.cal-assess {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+.cal-assess-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 1.5;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.cal-assess-n {
+  font-size: 9px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.cal-assess-test { background: #fef3c7; color: #92400e; }
+.cal-assess-exam { background: #fee2e2; color: #991b1b; }
+.cal-assess-hw   { background: #dbeafe; color: #1e40af; }
+.cal-assess-cw   { background: var(--gray-100); color: var(--gray-600); }
+.cal-assess-more { background: var(--gray-200); color: var(--gray-600); }
+
 .cal-month-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
