@@ -48,7 +48,10 @@
     retryTimer: null,
     calendarMonth: null,  // { year, month } for calendar view
     weekOffset: 0,        // 0 = current week, -1 = last week, 1 = next week
-    dayOffset: 0          // 0 = today, -1 = yesterday, 1 = tomorrow
+    dayOffset: 0,         // 0 = today, -1 = yesterday, 1 = tomorrow
+    // 行事曆那個當天小視窗正在看哪一天。用來在資料變動後重畫它 ——
+    // 在裡面按「全部完成」或事後按「復原」，清單上的狀態都要跟著更新。
+    dayModalDate: null
   };
 
   // Class colors for calendar
@@ -1913,6 +1916,7 @@
       if (l) { l.done = true; markLessonDirty(id); }
     }
     renderAll();
+    repaintOpenDayModal();
 
     // 復原記的是 id 不是物件。中途若按了「順延」，整班的課堂會被重新產生，
     // 舊的物件已經不在 state 裡 —— 改它也改不到真的資料，得重新找回來。
@@ -1925,6 +1929,7 @@
           if (l && l.done) { l.done = false; markLessonDirty(id); n++; }
         }
         renderAll();
+        repaintOpenDayModal();
         toast(n ? `已復原 ${n} 節` : '沒有可復原的課堂', 'info');
       }
     });
@@ -2077,9 +2082,20 @@
   // 點月曆的日期格 → 當天的完整清單。格子只有六十幾 px 寬，塞不下的都會被
   // 裁掉；這裡是唯一能看全一天的地方。跟今日課堂不同，它跟著月曆上方的
   // 班級篩選走 —— 兩邊顯示不同班級會讓人以為有課不見了。
+  // 資料一變（在裡面按了「全部完成」、或按了提示上的「復原」）就重畫這個視窗。
+  // 不重畫的話清單上的狀態會停在按下之前 —— 明明勾完了還寫著「未上」。
+  // dayModalDate 由 openDayModal 設定、openLessonModal 清掉，所以單節的詳細
+  // 視窗開著時不會被這裡蓋掉。
+  function repaintOpenDayModal() {
+    const overlay = $('modal-overlay');
+    if (!state.dayModalDate || !overlay || !overlay.classList.contains('open')) return;
+    openDayModal(state.dayModalDate);
+  }
+
   function openDayModal(dateStr) {
     const overlay = $('modal-overlay');
     if (!overlay) return;
+    state.dayModalDate = dateStr;
     const d = parseDate(dateStr);
     const DOW = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -2123,10 +2139,18 @@
     }
 
     $('modal-body').innerHTML = body;
-    $('modal-footer').innerHTML = '<button class="btn btn-outline" id="day-modal-close">關閉</button>';
+
+    // 「全部完成」跟今日課堂那條一樣，只在還有未完成、未延期的課時出現。
+    // 已延期的不能算進來 —— markDayDone 會跳過它們，算進來會讓按鈕按了也消不掉。
+    const undone = dayLessons.filter(l => !l.done && !l.postponed).length;
+    $('modal-footer').innerHTML = (undone === 0 ? '' : `
+        <span class="day-modal-count">${undone} 節未完成</span>
+        <button class="btn btn-success" id="day-modal-done-all">✓ 全部完成</button>`)
+      + '<button class="btn btn-outline" id="day-modal-close">關閉</button>';
     overlay.classList.add('open');
 
     $('day-modal-close')?.addEventListener('click', () => overlay.classList.remove('open'));
+    $('day-modal-done-all')?.addEventListener('click', () => markDayDone(dateStr));
     // 再點一節 → 進到單節的詳細視窗（同一層 overlay，直接換內容）。
     $('modal-body').querySelectorAll('.day-modal-item').forEach(item => {
       item.addEventListener('click', () => openLessonModal(item.dataset.id));
@@ -2136,6 +2160,8 @@
   function openLessonModal(id) {
     const l = findLesson(id);
     if (!l) return;
+    // 換成單節的視窗了，別再讓 repaintOpenDayModal 把當天清單蓋回來。
+    state.dayModalDate = null;
     const overlay = $('modal-overlay');
     const body = $('modal-body');
     const title = $('modal-title');
@@ -2200,6 +2226,7 @@
   function openHwModal(id) {
     const l = findLesson(id);
     if (!l) return;
+    state.dayModalDate = null;   // 同上：換視窗了，別再被當天清單蓋回來
     const overlay = $('modal-overlay');
     const body = $('modal-body');
     const title = $('modal-title');

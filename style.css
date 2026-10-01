@@ -652,6 +652,14 @@ textarea { resize: vertical; min-height: 80px; }
   color: var(--gray-400);
 }
 
+/* 「N 節未完成」。footer 是 justify-content: flex-end，靠 margin-right: auto
+   把它推到最左，按鈕留在右邊。 */
+.day-modal-count {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
 /* ========= TOAST ========= */
 .toast-container {
   position: fixed;
