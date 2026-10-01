@@ -1647,11 +1647,16 @@
       });
     }
 
-    // Get first day of month and calculate grid
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
-    const daysInMonth = lastDay.getDate();
+    // 月曆是 6 欄（週一到週六）。星期日不排格子 —— 但「星期日在週末」這件事
+    // 不能直接從 1 號算欄位：1 號若剛好是星期日，那一格根本不存在，會把第一格
+    // 放到第 7 欄去。所以要找的是第一個「排得出來」的日子，再從它往回推到
+    // 那一週的星期一。
+    const monthEnd = new Date(year, month + 1, 0);
+    const gridStart = (() => {
+      let d = new Date(year, month, 1);
+      if (d.getDay() === 0) d = addDays(d, 1);
+      return addDays(d, -((d.getDay() + 6) % 7));
+    })();
 
     // Collect all lessons for this month
     const allLessons = [];
@@ -1672,25 +1677,28 @@
     let html = '<div class="cal-month-grid">';
 
     // Day headers
-    const DAY_HEADERS = ['週一', '週二', '週三', '週四', '週五'];
+    const DAY_HEADERS = ['週一', '週二', '週三', '週四', '週五', '週六'];
     for (const dh of DAY_HEADERS) {
       html += `<div style="font-size:12px;font-weight:600;color:var(--gray-400);text-align:center;padding:8px 0">${dh}</div>`;
     }
 
-    // Fill previous month days
-    const prevMonthLast = new Date(year, month, 0);
-    for (let i = startDow - 1; i >= 0; i--) {
-      const d = prevMonthLast.getDate() - i;
-      html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d}</span></div></div>`;
-    }
+    // 逐日排格子：從那一週的星期一開始，一路排到「涵蓋整個月，而且最後一列
+    // 補滿」為止。補滿與否是數格子算的，不是拿 daysInMonth 去取餘數 ——
+    // daysInMonth 含不排的星期日，兩者差 2~5 天，餘數幾乎必然是錯的，
+    // 那正是以前每個月多出一整列空白的原因。
+    let cellCount = 0;
+    for (let d = new Date(gridStart); ; d = addDays(d, 1)) {
+      if (d.getDay() === 0) continue; // 星期日不排
+      const inMonth = d.getFullYear() === year && d.getMonth() === month;
+      if (!inMonth && d > monthEnd && cellCount % 6 === 0) break;
 
-    // Current month days
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateObj = new Date(year, month, d);
-      const dow = dateObj.getDay();
-      if (dow === 0 || dow === 6) continue; // Skip weekends
+      if (!inMonth) {
+        html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d.getDate()}</span></div></div>`;
+        cellCount++;
+        continue;
+      }
 
-      const dateStr = fmtDate(dateObj);
+      const dateStr = fmtDate(d);
       const isToday = dateStr === td;
       const isHol = holidaySet.has(dateStr);
       const dayLessons = lessonsByDate[dateStr] || [];
@@ -1703,7 +1711,7 @@
       // 別的月份的補格不帶，點了才不會跳出一個不屬於這個月的日子。
       html += `<div class="${cls}" data-date="${dateStr}">`;
       html += `<div class="cal-day-header">`;
-      html += `<span class="cal-day-num">${d}</span>`;
+      html += `<span class="cal-day-num">${d.getDate()}</span>`;
       if (isHol) {
         const hol = getHolidayName(dateStr);
         html += `<span class="cal-holiday-tag">${escHtml(hol) || '假期'}</span>`;
@@ -1724,13 +1732,7 @@
       }
 
       html += `</div>`;
-    }
-
-    // Fill next month days
-    const totalCells = startDow + daysInMonth;
-    const remaining = (5 - (totalCells % 5)) % 5;
-    for (let d = 1; d <= remaining; d++) {
-      html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d}</span></div></div>`;
+      cellCount++;
     }
 
     html += '</div>';

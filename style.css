@@ -842,7 +842,9 @@ textarea { resize: vertical; min-height: 80px; }
 
 .cal-month-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* 週一到週六 6 欄。星期六沒有固定課，但校曆、考試、功課截止會落在週六 ——
+     不排那一欄的話，那些日子在月曆上等於不存在。星期日仍然不排。 */
+  grid-template-columns: repeat(6, 1fr);
   gap: 8px;
 }
 
@@ -1052,8 +1054,10 @@ textarea { resize: vertical; min-height: 80px; }
      65px 寬的格子裡。原本這裡把 .cal-lesson 再降到 10px，比基礎值還小 ——
      方向是反的，小螢幕反而更難讀。改成放大，並把每個藥丸壓成一行（班級與
      主題併排），用省下來的高度換字級：藥丸變矮，字反而變大。 */
-  .cal-month-grid { gap: 4px; }
-  .cal-day { min-height: 100px; padding: 6px; }
+  /* 多了星期六那一欄之後，375px 的手機每格只剩 54px 寬（本來 65px）。
+     間距與內距各收一點，把寬度還給格子 —— 不然「[class-A]」三個字會被截掉。 */
+  .cal-month-grid { gap: 3px; }
+  .cal-day { min-height: 100px; padding: 5px; }
   .cal-day-num { font-size: 16px; }
   .cal-lesson { font-size: 12px; }
   .cal-lesson-class { font-size: 11px; display: inline; margin-right: 4px; }
