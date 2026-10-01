@@ -1254,15 +1254,6 @@
     dayLessons.sort((a, b) => a.time.localeCompare(b.time));
     const dayDone = dayLessons.filter(l => l.done).length;
 
-    // 「全部完成」那條只在當天還有沒勾的課時出現。已延期的不能算進來 ——
-    // markDayDone 會跳過它們，算進來會讓按鈕按了也消不掉。
-    const dayUndone = dayLessons.filter(l => !l.done && !l.postponed).length;
-    const dayBarHtml = dayUndone === 0 ? '' : `
-      <div class="day-actions">
-        <span class="day-actions-text">${dayUndone} 節未完成</span>
-        <button class="btn btn-sm btn-success" id="day-done-all">✓ 全部完成</button>
-      </div>`;
-
     $('stat-total-done').textContent = totalDone;
     $('stat-overdue').textContent = totalOverdue;
     $('stat-today').textContent = `${dayDone}/${dayLessons.length}`;
@@ -1309,6 +1300,15 @@
         </div>`);
       return;
     }
+
+    // 「全部完成」那條只在當天還有沒勾的課時出現。已延期的不能算進來 ——
+    // markDayDone 會跳過它們，算進來會讓按鈕按了也消不掉。
+    const dayUndone = dayLessons.filter(l => !l.done && !l.postponed).length;
+    const dayBarHtml = dayUndone === 0 ? '' : `
+      <div class="day-actions">
+        <span class="day-actions-text">${dayUndone} 節未完成</span>
+        <button class="btn btn-sm btn-success" id="day-done-all">✓ 全部完成</button>
+      </div>`;
 
     paintLessons(container, dayBarHtml + postponedHtml + dayLessons.map(l => renderLessonCard(l)).join(''));
 
@@ -1596,22 +1596,6 @@
     return byDate;
   }
 
-  // 月曆在 5 欄（週一到週五）下需要幾列、頭尾各補幾格。
-  // 這條算式抽出來是因為它出過錯：尾端補格原本用 daysInMonth 去算，但
-  // daysInMonth 含週末、格子卻只排平日，兩者差 8~10 天，取 5 的餘數幾乎必然
-  // 是錯的 —— 2026/9 到 2027/7 有 9 個月因此多出一整列空白格。
-  function calGridShape(year, month) {
-    const startDow = (new Date(year, month, 1).getDay() + 6) % 7;   // 週一 = 0
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    let dayCells = 0;
-    for (let d = 1; d <= daysInMonth; d++) {
-      const w = new Date(year, month, d).getDay();
-      if (w !== 0 && w !== 6) dayCells++;
-    }
-    const padEnd = (5 - (startDow + dayCells) % 5) % 5;
-    return { startDow, daysInMonth, dayCells, padEnd, rows: (startDow + dayCells + padEnd) / 5 };
-  }
-
   function renderCalendar() {
     const container = $('calendar-content');
     const label = $('cal-month-label');
@@ -1655,7 +1639,10 @@
     }
 
     // Get first day of month and calculate grid
-    const { startDow, daysInMonth, padEnd } = calGridShape(year, month);
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
+    const daysInMonth = lastDay.getDate();
 
     // Collect all lessons for this month
     const allLessons = [];
@@ -1678,7 +1665,7 @@
     // Day headers
     const DAY_HEADERS = ['週一', '週二', '週三', '週四', '週五'];
     for (const dh of DAY_HEADERS) {
-      html += `<div style="font-size:12px;font-weight:600;color:var(--gray-400);text-align:center;padding:2px 0">${dh}</div>`;
+      html += `<div style="font-size:12px;font-weight:600;color:var(--gray-400);text-align:center;padding:8px 0">${dh}</div>`;
     }
 
     // Fill previous month days
@@ -1703,7 +1690,7 @@
       if (isToday) cls += ' today';
       if (isHol) cls += ' holiday';
 
-      html += `<div class="${cls}" data-date="${dateStr}">`;
+      html += `<div class="${cls}">`;
       html += `<div class="cal-day-header">`;
       html += `<span class="cal-day-num">${d}</span>`;
       if (isHol) {
@@ -1719,15 +1706,9 @@
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.postponed ? 'overdue' : 'pending');
         const color = CLASS_COLORS[l.class] || '#64748b';
-        // 一行。格子寬度只有六十幾 px，主題放不下 —— 手機由 CSS 把
-        // .cal-lesson-topic 收掉，只留班級名，寬螢幕則照常顯示。
-        // 狀態靠底色（.done/.pending/.overdue），勾勾圖示拿掉是為了把橫向
-        // 空間讓給班級名；完整狀態與主題留在 title。
-        const status = l.done ? '已上完' : (l.postponed ? '已延期' : '未上');
-        html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}"`
-          + ` data-id="${l.id}" title="${escHtml(`${l.class} 第${l.period}節 · ${status} · ${l.topic}`)}">`;
+        html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
         html += `<span class="cal-lesson-class">${escHtml(l.class)}</span>`;
-        html += `<span class="cal-lesson-topic">${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}</span>`;
+        html += `${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}`;
         html += `</div>`;
       }
 
@@ -1735,7 +1716,9 @@
     }
 
     // Fill next month days
-    for (let d = 1; d <= padEnd; d++) {
+    const totalCells = startDow + daysInMonth;
+    const remaining = (5 - (totalCells % 5)) % 5;
+    for (let d = 1; d <= remaining; d++) {
       html += `<div class="cal-day other-month"><div class="cal-day-header"><span class="cal-day-num">${d}</span></div></div>`;
     }
 
@@ -1743,45 +1726,6 @@
     container.innerHTML = html;
     container.querySelectorAll('.cal-lesson-clickable').forEach(el => {
       el.addEventListener('click', () => openLessonModal(el.dataset.id));
-    });
-    markCalOverflow(container);
-  }
-
-  // 格線高度是照「螢幕剩多少」切的，所以哪一天放不放得下要等排完才知道。
-  // 塞不下的藥丸只是被 overflow:hidden 裁掉，不會消失 —— 沒有這個指示，
-  // 老師會以為那天只有兩節。
-  function markCalOverflow(container) {
-    // 先全部量完、再一起插入。邊量邊插的話，每一次 append 都會讓下一次的
-    // scrollHeight 重新排版一次，二十幾個格子就是二十幾次無謂的 reflow。
-    const pending = [];
-    container.querySelectorAll('.cal-day').forEach(day => {
-      if (day.scrollHeight <= day.clientHeight + 1) return;
-      const bottom = day.getBoundingClientRect().bottom;
-      let hidden = 0;
-      day.querySelectorAll('.cal-lesson').forEach(p => {
-        if (p.getBoundingClientRect().bottom > bottom) hidden++;
-      });
-      // hidden 是 0 就不插 —— 會出現「+0」那種沒意義的標記
-      if (hidden) pending.push([day, hidden]);
-    });
-
-    for (const [day, hidden] of pending) {
-      const chip = document.createElement('span');
-      chip.className = 'cal-day-more';
-      chip.textContent = `+${hidden}`;
-      chip.title = `還有 ${hidden} 節，點一下看那一天`;
-      if (day.dataset.date) chip.dataset.date = day.dataset.date;
-      day.appendChild(chip);
-    }
-
-    // 被裁掉的藥丸在月曆上按不到，這是唯一能去看那天的路。
-    // 只有真的溢出時才會出現，平時看不到這個行為。
-    container.querySelectorAll('.cal-day-more').forEach(chip => {
-      chip.addEventListener('click', () => {
-        if (!chip.dataset.date) return;
-        state.dayOffset = Math.round((parseDate(chip.dataset.date) - today()) / 86400000);
-        switchView('today');
-      });
     });
   }
 
@@ -2418,10 +2362,7 @@
   // ============ INIT ============
   function showApp() {
     $('setup-screen').style.display = 'none';
-    // 要用 flex 不能用 block：行事曆的高度是靠 flex 從視窗一路分配下來的
-    // （見 style.css 的 #app-screen 註解）。這裡用 inline style 蓋掉 CSS，
-    // 寫成 block 會讓那條分配鏈斷掉。
-    $('app-screen').style.display = 'flex';
+    $('app-screen').style.display = 'block';
     renderAll();
   }
 
@@ -2546,16 +2487,6 @@
       state.retryTimer = null;
       state.retryDelay = 0;
       saveProgressNow();
-    });
-
-    // 月曆的格子高度是照視窗剩多少空間切的，塞不下的藥丸會收成「+N」。
-    // 視窗一變（手機轉向、桌機拉視窗），「塞不塞得下」的答案就跟著變了，
-    // 所以要重量一次。只在行事曆是當前檢視時做，其他檢視不必付這個成本。
-    let calResizeTimer = null;
-    window.addEventListener('resize', () => {
-      if (state.currentView !== 'calendar') return;
-      clearTimeout(calResizeTimer);
-      calResizeTimer = setTimeout(renderCalendar, 150);
     });
 
     // Register SW

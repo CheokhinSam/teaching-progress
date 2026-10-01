@@ -30,17 +30,13 @@ body {
   background: var(--gray-50);
   color: var(--gray-800);
   line-height: 1.6;
-  /* 一定要跟 #app-screen 用同一個單位。100vh 是「網址列收起時」的高度，
-     比 dvh 大；兩者不一致的話，光是這段落差就會讓文件多出一條捲軸。 */
   min-height: 100vh;
-  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ========= LAYOUT ========= */
 #setup-screen {
   min-height: 100vh;
-  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -71,14 +67,7 @@ body {
 
 #app-screen {
   display: none;
-  /* showApp() 會把它設成 flex。方向在這裡定，因為 flex-direction 只在
-     display:flex 時有意義 —— 不這樣寫，行事曆就拿不到「剩下的高度」。
-     高度一路 flex:1 傳下去：app-body → main-content → #view-calendar
-     → #calendar-content → .cal-month-grid，格線才能剛好填滿一屏。
-     dvh 是動態視窗高度（手機網址列收起時會跟著變）；vh 是舊瀏覽器的退路。 */
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
+  min-height: 100vh;
 }
 
 .app-header {
@@ -88,7 +77,8 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  flex-shrink: 0;
+  position: sticky;
+  top: 0;
   z-index: 100;
 }
 
@@ -131,11 +121,7 @@ body {
 
 .app-body {
   display: flex;
-  /* 本來是 min-height: calc(100vh - 57px) —— 只有下限沒有上限，內容多高
-     它就長多高，所以 .main-content 的 overflow-y 從來沒生效過，捲動落在
-     整份文件上。改成填滿 #app-screen 剩下的高度，「剩餘空間」才真的存在。 */
-  flex: 1;
-  min-height: 0;
+  min-height: calc(100vh - 57px);
 }
 
 .sidebar {
@@ -204,27 +190,6 @@ body {
   padding: 24px;
   overflow-y: auto;
   min-width: 0;
-  /* 縱向 flex，行事曆才有一份「剩下的高度」可以拿。
-     其他檢視靠 .view-panel 的 flex-shrink:0 維持原本的區塊流。 */
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-/* 今日／本週／對比／設定維持原本的行為：自然高度，超出時由 .main-content 捲動 */
-.view-panel { flex-shrink: 0; }
-
-/* 行事曆反過來 —— 它要吃掉剩下的高度，而且自己不捲動 */
-#view-calendar {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-#calendar-content {
-  flex: 1;
-  min-height: 0;
 }
 
 /* ========= NAV TABS ========= */
@@ -236,7 +201,6 @@ body {
   border-radius: var(--radius);
   padding: 4px;
   box-shadow: var(--shadow);
-  flex-shrink: 0;
 }
 
 .nav-tab {
@@ -281,6 +245,24 @@ body {
 .lesson-card.today { border-left-color: var(--primary); }
 .lesson-card.overdue { border-left-color: var(--danger); }
 .lesson-card.shifted { border-left-color: var(--warning); opacity: 0.7; }
+
+/* 「今天全部完成」那條。放在課堂清單最上面，補登隔了幾天的進度時用。 */
+.day-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  background: white;
+  border-radius: var(--radius);
+  padding: 8px 10px 8px 16px;
+  box-shadow: var(--shadow);
+}
+
+.day-actions-text {
+  font-size: 13px;
+  color: var(--gray-500);
+}
 
 /* 已延期待補清單。延期之後就沒有地方再列出來，老師標記完就忘了補。 */
 .postponed-panel {
@@ -622,8 +604,7 @@ textarea { resize: vertical; min-height: 80px; }
 .toast-info { background: var(--primary); }
 .toast-warning { background: var(--warning); }
 
-/* 提示裡的動作按鈕（目前只有「復原」）。用半透明白，
-   這樣底下不管是 success 綠還是 info 藍都看得出來。 */
+/* 「復原」按鈕。底是跟著提示的顏色走的，所以用半透明白而不是固定色。 */
 .toast-action {
   margin-left: 14px;
   padding: 3px 12px;
@@ -636,7 +617,6 @@ textarea { resize: vertical; min-height: 80px; }
   border-radius: 6px;
   cursor: pointer;
 }
-
 .toast-action:hover { background: rgba(255, 255, 255, 0.36); }
 
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } }
@@ -708,30 +688,26 @@ textarea { resize: vertical; min-height: 80px; }
 }
 
 /* ========= CALENDAR VIEW ========= */
-/* 工具列的 margin 從 16px 收到 8px。這條檢視現在的高度是固定的，
-   每一 px 的留白都是從格線身上拿的。 */
 .cal-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
   background: white;
   border-radius: var(--radius);
-  padding: 8px 12px;
+  padding: 12px 16px;
   box-shadow: var(--shadow);
-  flex-shrink: 0;
 }
 
 .cal-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 8px;
-  padding: 6px 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
   background: white;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  flex-shrink: 0;
 }
 
 .cal-legend-item {
@@ -792,26 +768,14 @@ textarea { resize: vertical; min-height: 80px; }
 .cal-month-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  /* 每列等分剩下的高度，不隨內容長高 —— 這是「一屏看完一個月」的關鍵。
-     原本靠 .cal-day 的 min-height:120px 撐，5 列就要 600px 以上，
-     筆電只剩約 500px 可用，必然溢出。
-     grid-template-rows:auto 是必要的：週一~週五那排標題也是這張 grid 的第一列，
-     不寫的話它會跟日期格一起平分高度，白白吃掉一整列。 */
-  grid-template-rows: auto;
-  grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
-  height: 100%;
 }
 
 .cal-day {
-  /* min-height 拿掉、overflow 收起來：高度由上面的 1fr 決定，
-     內容多到放不下時裁掉，再由 markCalOverflow() 補「+N」。 */
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
+  min-height: 120px;
   background: white;
   border-radius: 8px;
-  padding: 6px;
+  padding: 8px;
   box-shadow: var(--shadow);
   transition: var(--transition);
 }
@@ -825,12 +789,10 @@ textarea { resize: vertical; min-height: 80px; }
   font-size: 12px;
   font-weight: 600;
   color: var(--gray-500);
-  margin-bottom: 3px;
+  margin-bottom: 6px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
 }
 
 .cal-day-num {
@@ -858,15 +820,11 @@ textarea { resize: vertical; min-height: 80px; }
   border-radius: 4px;
 }
 
-/* 藥丸一律一行。高度是這一格最稀缺的資源 —— line-height 從預設 1.6 收到
-   1.25、padding 上下各減 1px，一顆就從約 24px 變成約 19px，
-   同樣的格子可以多放一節。 */
 .cal-lesson {
   font-size: 11px;
-  line-height: 1.25;
-  padding: 2px 5px;
+  padding: 3px 6px;
   border-radius: 4px;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -880,56 +838,11 @@ textarea { resize: vertical; min-height: 80px; }
 .cal-lesson.pending { background: #eff6ff; color: #1e40af; border-left-color: var(--primary); }
 .cal-lesson.overdue { background: var(--danger-light); color: #991b1b; border-left-color: var(--danger); }
 
-/* 班級名改成跟主題同一行。原本 display:block 讓每顆藥丸變兩行，
-   高度翻倍 —— 那正是「看不完整個月」的另一半原因。 */
 .cal-lesson-class {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   opacity: 0.7;
-  display: inline;
-  margin-right: 4px;
-}
-
-/* 主題。桌機格子約 240px 寬，放得下，而且是白撿的（同一行不佔額外高度）；
-   手機格子只有六十幾 px，硬塞只會被截成「[class-A] 機…」，不如把寬度讓給班級名。 */
-.cal-lesson-topic { display: inline; }
-
-/* 格子被裁掉幾顆藥丸。絕對定位才不會自己把格子又撐爆。 */
-.cal-day-more {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.6;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: var(--gray-300);
-  color: var(--gray-700);
-  cursor: pointer;
-  /* 蓋在藥丸上時用白框把它托出來，不然會跟藥丸糊在一起 */
-  box-shadow: 0 0 0 2px white;
-}
-
-.cal-day-more:hover { background: var(--gray-400); }
-
-/* 「全部完成」那條。只在當天還有沒勾的課時才渲染出來，
-   所以平時不會佔位。 */
-.day-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  background: white;
-  border-radius: var(--radius);
-  padding: 8px 10px 8px 16px;
-  box-shadow: var(--shadow);
-}
-
-.day-actions-text {
-  font-size: 13px;
-  color: var(--gray-500);
+  display: block;
 }
 
 /* ========= WEEK NAV ========= */
@@ -1063,24 +976,13 @@ textarea { resize: vertical; min-height: 80px; }
      方向是反的，小螢幕反而更難讀。改成放大，並把每個藥丸壓成一行（班級與
      主題併排），用省下來的高度換字級：藥丸變矮，字反而變大。 */
   .cal-month-grid { gap: 4px; }
-  /* 高度由 grid-auto-rows 的 1fr 決定。這裡絕對不能再寫 min-height ——
-     一寫就等於跟「填滿螢幕」打架，格線又會把頁面撐出捲軸。 */
-  .cal-day { padding: 4px 5px; }
+  .cal-day { min-height: 100px; padding: 6px; }
   .cal-day-num { font-size: 16px; }
   .cal-lesson { font-size: 12px; }
-  .cal-lesson-class { font-size: 11px; }
-  /* 六十幾 px 寬的格子放不下「班級＋主題」，硬塞只會被截成「[class-A] 機…」。
-     把寬度讓給班級名，主題留給桌機。 */
-  .cal-lesson-topic { display: none; }
+  .cal-lesson-class { font-size: 11px; display: inline; margin-right: 4px; }
   .cal-assess-chip { font-size: 11px; }
   .cal-assess-n { font-size: 10px; }
   .cal-holiday-tag { font-size: 11px; }
-  /* 圖例一折成兩行就吃掉一顆藥丸的高度。改成固定一行、橫向捲動，
-     並把班級色點收起來 —— 藥丸自己寫了班級名，色點的解碼作用沒了，
-     而側邊欄本來就能篩班級（還多了進度徽章）。 */
-  .cal-legend { flex-wrap: nowrap; overflow-x: auto; }
-  .cal-legend-item[data-class],
-  .cal-legend-sep { display: none; }
 
   .modal { max-width: 100%; margin: 10px; }
 
