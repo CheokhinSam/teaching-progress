@@ -583,6 +583,75 @@ textarea { resize: vertical; min-height: 80px; }
   justify-content: flex-end;
 }
 
+/* ========= DAY MODAL（行事曆點日期）========= */
+.day-modal-holiday {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #fef2f2;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.day-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 整列是一顆按鈕 —— 手機上手指點得到，桌機也能用 Tab 走過去。
+   它是 modal-body 裡唯一的內容，所以吃掉整個寬度是合理的。 */
+.day-modal-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.day-modal-item:hover { border-color: var(--primary); background: var(--gray-50); }
+
+.day-modal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.day-modal-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+
+.day-modal-line1 { font-size: 14px; font-weight: 600; color: var(--gray-800); }
+
+.day-modal-period { font-size: 12px; font-weight: 400; color: var(--gray-500); margin-left: 8px; }
+
+.day-modal-line2 {
+  font-size: 13px;
+  color: var(--gray-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-modal-status { font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.day-modal-status.done { color: var(--success); }
+.day-modal-status.overdue { color: var(--danger); }
+.day-modal-status.shifted { color: #92400e; }
+.day-modal-status.pending { color: var(--gray-400); }
+
+.day-modal-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--gray-400);
+}
+
 /* ========= TOAST ========= */
 .toast-container {
   position: fixed;
@@ -787,6 +856,10 @@ textarea { resize: vertical; min-height: 80px; }
 }
 
 .cal-day:hover { box-shadow: var(--shadow-md); }
+
+/* 整格可點：按空白處看那一天的完整清單（openDayModal）。
+   別的月份的補格沒有 data-date，不給 pointer，免得看起來像能按。 */
+.cal-day[data-date] { cursor: pointer; }
 .cal-day.today { border: 2px solid var(--primary); }
 .cal-day.other-month { opacity: 0.4; }
 .cal-day.holiday { background: #fef2f2; }

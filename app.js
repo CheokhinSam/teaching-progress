@@ -265,7 +265,9 @@
   // 考試與期中考例外，只按型別合併：它們是全校統一的日子，但每個班的 scope
   // 寫法不一樣（[class-A]寫「機械運動+聲現象…」、[class-C]寫「功與機械能…」、有的班
   // 根本空著），照 scope 分組會讓同一天冒出三個「考試」標記。scope 收進 tooltip。
-  function renderAssessChips(events) {
+  // max 預設 3 —— 月曆格子只有六十幾 px 寬，塞不下更多。
+  // 當日清單（openDayModal）不受這個限制，那裡有整個視窗的寬度。
+  function renderAssessChips(events, max = 3) {
     if (!events || events.length === 0) return '';
     const schoolWide = t => t === 'exam' || t === 'midterm';
     const groups = new Map();
@@ -281,15 +283,15 @@
       + '　' + g.classes.join('、');
 
     let html = '<div class="cal-assess">';
-    for (const g of list.slice(0, 3)) {
+    for (const g of list.slice(0, max)) {
       const meta = ASSESS_LABEL[g.type];
       html += `<span class="cal-assess-chip ${meta.cls}" title="${escHtml(tip(g))}">`
         + escHtml(meta.text)
         + (g.classes.length > 1 ? `<span class="cal-assess-n">${g.classes.length}</span>` : '')
         + '</span>';
     }
-    if (list.length > 3) {
-      const rest = list.slice(3);
+    if (list.length > max) {
+      const rest = list.slice(max);
       html += `<span class="cal-assess-chip cal-assess-more" title="${escHtml(rest.map(tip).join('\n'))}">`
         + `+${rest.length}</span>`;
     }
@@ -1697,7 +1699,9 @@
       if (isToday) cls += ' today';
       if (isHol) cls += ' holiday';
 
-      html += `<div class="${cls}">`;
+      // data-date 是「點這格看當天課堂」的依據（openDayModal）。
+      // 別的月份的補格不帶，點了才不會跳出一個不屬於這個月的日子。
+      html += `<div class="${cls}" data-date="${dateStr}">`;
       html += `<div class="cal-day-header">`;
       html += `<span class="cal-day-num">${d}</span>`;
       if (isHol) {
@@ -1733,6 +1737,15 @@
     container.innerHTML = html;
     container.querySelectorAll('.cal-lesson-clickable').forEach(el => {
       el.addEventListener('click', () => openLessonModal(el.dataset.id));
+    });
+
+    // 點日期格空白處 → 看那一天的課堂。藥丸自己已經有去處（單節的詳細視窗），
+    // 事件會冒泡上來，所以在這裡擋掉，不然點藥丸會連開兩層。
+    container.querySelectorAll('.cal-day[data-date]').forEach(day => {
+      day.addEventListener('click', e => {
+        if (e.target.closest('.cal-lesson-clickable')) return;
+        openDayModal(day.dataset.date);
+      });
     });
   }
 
@@ -2057,6 +2070,65 @@
     }
 
     state.lessons[cls] = lessons;
+  }
+
+  // 點月曆的日期格 → 當天的完整清單。格子只有六十幾 px 寬，塞不下的都會被
+  // 裁掉；這裡是唯一能看全一天的地方。跟今日課堂不同，它跟著月曆上方的
+  // 班級篩選走 —— 兩邊顯示不同班級會讓人以為有課不見了。
+  function openDayModal(dateStr) {
+    const overlay = $('modal-overlay');
+    if (!overlay) return;
+    const d = parseDate(dateStr);
+    const DOW = ['日', '一', '二', '三', '四', '五', '六'];
+
+    const dayLessons = [];
+    for (const [cls, lessons] of Object.entries(state.lessons)) {
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
+      for (const l of lessons) {
+        if (l.date === dateStr) dayLessons.push(l);
+      }
+    }
+    dayLessons.sort((a, b) => a.time.localeCompare(b.time));
+
+    $('modal-title').textContent = `${d.getMonth() + 1}月${d.getDate()}日（${DOW[d.getDay()]}）`;
+
+    const holiday = getHolidayName(dateStr);
+    const assess = buildAssessmentIndex().get(dateStr) || [];
+
+    let body = '';
+    if (holiday) body += `<div class="day-modal-holiday">🎌 ${escHtml(holiday)}</div>`;
+    // 這裡不受月曆那個「最多 3 個」的限制 —— 視窗夠寬，而且漏看一個考試
+    // 比多佔一行嚴重得多。
+    if (assess.length) body += renderAssessChips(assess, 99);
+
+    if (dayLessons.length === 0) {
+      body += `<div class="day-modal-empty">這天沒有課堂</div>`;
+    } else {
+      body += '<div class="day-modal-list">' + dayLessons.map(l => {
+        const color = CLASS_COLORS[l.class] || '#64748b';
+        const late = !l.done && !l.postponed && parseDate(l.date) < today();
+        const status = l.done ? '已上完' : (l.postponed ? '已延期' : (late ? '未上 · 逾期' : '未上'));
+        const statusCls = l.done ? 'done' : (l.postponed ? 'shifted' : (late ? 'overdue' : 'pending'));
+        return `<button type="button" class="day-modal-item" data-id="${escHtml(l.id)}">
+            <span class="day-modal-dot" style="background:${color}"></span>
+            <span class="day-modal-main">
+              <span class="day-modal-line1">${escHtml(l.class)}<span class="day-modal-period">第${l.period}節 ${escHtml(l.time)}</span></span>
+              <span class="day-modal-line2">${escHtml(l.topic)}</span>
+            </span>
+            <span class="day-modal-status ${statusCls}">${status}</span>
+          </button>`;
+      }).join('') + '</div>';
+    }
+
+    $('modal-body').innerHTML = body;
+    $('modal-footer').innerHTML = '<button class="btn btn-outline" id="day-modal-close">關閉</button>';
+    overlay.classList.add('open');
+
+    $('day-modal-close')?.addEventListener('click', () => overlay.classList.remove('open'));
+    // 再點一節 → 進到單節的詳細視窗（同一層 overlay，直接換內容）。
+    $('modal-body').querySelectorAll('.day-modal-item').forEach(item => {
+      item.addEventListener('click', () => openLessonModal(item.dataset.id));
+    });
   }
 
   function openLessonModal(id) {
