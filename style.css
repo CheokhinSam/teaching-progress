@@ -292,6 +292,9 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  /* 延期／順延／作業搬到標題列右邊之後，窄螢幕塞不下時要能自己換行，
+     而不是把班級名擠成一團。 */
+  flex-wrap: wrap;
 }
 
 .lesson-class {
@@ -357,10 +360,13 @@ body {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+/* 延期／順延／作業。本來自己佔一整行（含 margin-top 約 44px），
+   移到標題列右邊之後每張卡少一行 —— 一屏就能多放一節課。
+   align-self 置中是配合左邊 44px 的打勾鈕，不然按鈕會浮在標題列頂端。 */
 .lesson-actions {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  align-self: center;
 }
 
 .lesson-hw {
@@ -857,35 +863,35 @@ textarea { resize: vertical; min-height: 80px; }
   box-shadow: var(--shadow);
 }
 
-/* ========= STATS BAR ========= */
-.stats-bar {
+/* ========= STATS LINE ========= */
+/* 本來是三張卡片（約 110px 高），但這三個數字老師幾乎不看。
+   收成一行細字，把高度讓給課堂清單。 */
+.stats-line {
   display: flex;
-  gap: 12px;
-  margin-bottom: 24px;
+  align-items: center;
   flex-wrap: wrap;
-}
-
-.stat-card {
-  flex: 1;
-  min-width: 140px;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 5px 14px;
   background: white;
   border-radius: var(--radius);
-  padding: 16px;
   box-shadow: var(--shadow);
-  text-align: center;
-}
-
-.stat-card .stat-icon { font-size: 24px; margin-bottom: 4px; }
-.stat-card .stat-number {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--gray-800);
-}
-
-.stat-card .stat-desc {
   font-size: 12px;
   color: var(--gray-500);
 }
+
+.stats-line b {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-700);
+}
+
+/* 逾期未完是唯一要老師採取行動的數字。為 0 時不標紅 ——
+   一個永遠掛在那裡的紅色 0 只會讓人對紅色麻木，真的有欠時就看不見了。
+   （class 由 renderToday 依數字切換） */
+.stats-line b.is-overdue { color: var(--danger); }
+
+.stats-sep { color: var(--gray-300); }
 
 /* ========= EMPTY STATE ========= */
 .empty-state {
@@ -963,9 +969,7 @@ textarea { resize: vertical; min-height: 80px; }
   .nav-tabs { overflow-x: auto; }
   .nav-tab { font-size: 13px; padding: 8px 12px; }
 
-  .stats-bar { gap: 8px; }
-  .stat-card { min-width: 100px; padding: 12px; }
-  .stat-card .stat-number { font-size: 22px; }
+  .stats-line { gap: 5px; padding: 5px 12px; }
 
   .comparison-grid { grid-template-columns: 1fr; }
   /* 原本寫的是 .calendar-grid，這個類別不存在，所以這條規則從來沒生效過。
@@ -986,7 +990,10 @@ textarea { resize: vertical; min-height: 80px; }
 
   .modal { max-width: 100%; margin: 10px; }
 
-  .lesson-header { flex-direction: column; }
+  /* 手機放不下三個按鈕時就讓它們整行換到下面（.lesson-header 是 flex-wrap）。
+     寬度寫死 100% 是為了讓它每次都換行、每次都佔滿 —— 讓它「放得下就擠在
+     旁邊」的話，不同手機會出現兩種排版，反而難預期。 */
+  .lesson-actions { width: 100%; }
 
   .setup-card { padding: 24px; }
 }

@@ -1255,7 +1255,14 @@
     const dayDone = dayLessons.filter(l => l.done).length;
 
     $('stat-total-done').textContent = totalDone;
-    $('stat-overdue').textContent = totalOverdue;
+    const odEl = $('stat-overdue');
+    odEl.textContent = totalOverdue;
+    // 為 0 時不標紅。永遠掛著一個紅色 0 只會讓人對紅色麻木，
+    // 真的有欠的時候那個紅就不跳了。
+    odEl.classList.toggle('is-overdue', totalOverdue > 0);
+    // 這個數字算的是「正在看的那一天」，不是今天。用左右鍵翻到別天時
+    // 標籤還寫「今日」會誤導。
+    $('stat-today-label').textContent = state.dayOffset === 0 ? '今日' : '當日';
     $('stat-today').textContent = `${dayDone}/${dayLessons.length}`;
 
     // 已延期清單。「延期」是把課堂挪走，但延期之後就再也沒有地方列出來 ——
@@ -1406,6 +1413,11 @@
               </div>
             </div>
           </div>
+          <div class="lesson-actions">
+            <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}>${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
+            <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
+            <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
+          </div>
         </div>
         <div class="lesson-topic">
           <input class="inline-edit" type="text" data-field="topic" data-id="${escHtml(l.id)}"
@@ -1416,11 +1428,6 @@
                     placeholder="點此寫課後備註…" aria-label="課後備註">${escHtml(l.note)}</textarea>
         </div>
         ${l.hw ? `<div class="lesson-hw">📋 ${escHtml(typeof l.hw === 'string' ? l.hw : l.hw.topic || '')}</div>` : ''}
-        <div class="lesson-actions">
-          <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}>${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
-          <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
-          <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
-        </div>
       </div>`;
   }
 

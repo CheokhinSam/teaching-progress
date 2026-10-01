@@ -88,22 +88,14 @@
 
         <!-- ===== VIEW: TODAY ===== -->
         <section id="view-today" class="view-panel">
-          <div class="stats-bar">
-            <div class="stat-card">
-              <div class="stat-icon">✅</div>
-              <div class="stat-number" id="stat-total-done">0</div>
-              <div class="stat-desc">累計完成</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon">⚠️</div>
-              <div class="stat-number" id="stat-overdue" style="color:var(--danger)">0</div>
-              <div class="stat-desc">逾期未完</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon">📅</div>
-              <div class="stat-number" id="stat-today">0/0</div>
-              <div class="stat-desc">今日進度</div>
-            </div>
+          <!-- 這三個數字老師幾乎不看，但三張卡吃掉約 110px。收成一行細字。
+               逾期未完排最前，因為只有它是「要你去做事」的數字。 -->
+          <div class="stats-line">
+            <span>逾期未完 <b id="stat-overdue">0</b></span>
+            <span class="stats-sep">·</span>
+            <span>累計完成 <b id="stat-total-done">0</b></span>
+            <span class="stats-sep">·</span>
+            <span><span id="stat-today-label">今日</span> <b id="stat-today">0/0</b></span>
           </div>
           <div class="week-nav">
             <button class="btn btn-outline btn-sm" id="today-prev">◀ 前一天</button>
