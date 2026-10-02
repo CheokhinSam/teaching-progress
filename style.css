@@ -593,6 +593,15 @@ textarea { resize: vertical; min-height: 80px; }
   color: #b91c1c;
 }
 
+.day-modal-exam {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #92400e;
+}
+
 .day-modal-list {
   display: flex;
   flex-direction: column;
@@ -931,10 +940,32 @@ textarea { resize: vertical; min-height: 80px; }
   justify-content: center;
 }
 
+/* 一天可能同時有統測週標籤和假期標籤（例：11/2 追思節在統測週內），
+   所以兩個標籤包一層，靠右排，不跟日期數字搶位。 */
+.cal-day-tags {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .cal-holiday-tag {
   font-size: 10px;
   color: var(--danger);
   background: var(--danger-light);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* 統測週／考試週。跟假期一樣是全校同一天的事，只是底色用琥珀色區分，
+   免得跟真的放假混淆 —— 統測週內大多數日子還是要上課的。 */
+.cal-day.examday { background: #fffbeb; }
+.cal-day.examday.holiday { background: #fef2f2; }
+
+.cal-exam-tag {
+  font-size: 10px;
+  color: #92400e;
+  background: #fef3c7;
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -1103,6 +1134,7 @@ textarea { resize: vertical; min-height: 80px; }
   .cal-assess-n { font-size: 10px; }
   .cal-note-chip { font-size: 11px; }
   .cal-holiday-tag { font-size: 11px; }
+  .cal-exam-tag { font-size: 11px; }
 
   .modal { max-width: 100%; margin: 10px; }
 

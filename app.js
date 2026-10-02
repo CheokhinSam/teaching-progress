@@ -197,6 +197,28 @@
     return examRanges.some(r => d >= r.start && d <= r.end);
   }
 
+  // 統測週、考試週是全校同一天的事，跟假期一樣寫一次就夠。
+  // 課節表上每個班都各自寫了一遍「統測」，加起來一大串 —— 老師看日曆時
+  // 只想知「這天是統測週」，不想看六個班重複六次，所以改由這裡統一出標籤。
+  // 格子窄，用簡稱；點進去看當天清單時才顯示全名。
+  function examLabel(event) {
+    if (/統測/.test(event)) return '統測';
+    if (/考試/.test(event)) return '考試';
+    return event;
+  }
+
+  function buildExamTags() {
+    const tags = new Map();
+    for (const r of buildExamRanges()) {
+      const full = r.event || '';
+      const short = examLabel(full);
+      for (let d = new Date(r.start); d <= r.end; d.setDate(d.getDate() + 1)) {
+        tags.set(fmtDate(d), { short, full });
+      }
+    }
+    return tags;
+  }
+
   // ============ DATA: ASSESSMENT DATES ============
   // plan.json 的 assessments 一直沒有被用到。老師早就把每班的測驗、考試、
   // 功課截止日都輸入了，行事曆上卻什麼都看不到 —— 這一塊把它攤平成「日期 → 事件」。
@@ -1796,6 +1818,7 @@
     const holidaySet = buildHolidaySet();
     const assessIndex = buildAssessmentIndex();
     const noteIndex = buildNoteIndex();
+    const examTags = buildExamTags();
 
     // Legend
     if (legend) {
@@ -1878,21 +1901,26 @@
       const dateStr = fmtDate(d);
       const isToday = dateStr === td;
       const isHol = holidaySet.has(dateStr);
+      const exam = examTags.get(dateStr);
       const dayLessons = lessonsByDate[dateStr] || [];
 
       let cls = 'cal-day';
       if (isToday) cls += ' today';
       if (isHol) cls += ' holiday';
+      if (exam) cls += ' examday';
 
       // data-date 是「點這格看當天課堂」的依據（openDayModal）。
       // 別的月份的補格不帶，點了才不會跳出一個不屬於這個月的日子。
       html += `<div class="${cls}" data-date="${dateStr}">`;
       html += `<div class="cal-day-header">`;
       html += `<span class="cal-day-num">${d.getDate()}</span>`;
+      const tags = [];
+      if (exam) tags.push(`<span class="cal-exam-tag">${escHtml(exam.short)}</span>`);
       if (isHol) {
         const hol = getHolidayName(dateStr);
-        html += `<span class="cal-holiday-tag">${escHtml(hol) || '假期'}</span>`;
+        tags.push(`<span class="cal-holiday-tag">${escHtml(hol) || '假期'}</span>`);
       }
+      if (tags.length) html += `<span class="cal-day-tags">${tags.join('')}</span>`;
       html += `</div>`;
 
       // 測驗／考試／功課截止放在課堂之前 —— 這些是「那天一定要記得」的事，
@@ -2220,11 +2248,13 @@
     $('modal-title').textContent = `${d.getMonth() + 1}月${d.getDate()}日（${DOW[d.getDay()]}）`;
 
     const holiday = getHolidayName(dateStr);
+    const exam = buildExamTags().get(dateStr);
     const assess = buildAssessmentIndex().get(dateStr) || [];
     const notes = buildNoteIndex().get(dateStr) || [];
 
     let body = '';
     if (holiday) body += `<div class="day-modal-holiday">🎌 ${escHtml(holiday)}</div>`;
+    if (exam) body += `<div class="day-modal-exam">📝 ${escHtml(exam.full)}</div>`;
     // 這裡不受月曆那個「最多 3 個」的限制 —— 視窗夠寬，而且漏看一個考試
     // 比多佔一行嚴重得多。
     if (assess.length) body += renderAssessChips(assess, 99);
