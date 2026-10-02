@@ -416,108 +416,129 @@
     return { s1: pick('semester1'), s2: pick('semester2') };
   }
 
+  // ============ DATA: 逐日課節表 ============
+  // plan 的 schedule[班級].days 是課節表「日期／節數／內容」的逐字抄錄。
+  // 有它就完全照它排課：日期、節數、內容都不再從 weekly_slots、假期表、考試表
+  // 推導 —— 推導只要有一處對不上，後面每一節都會位移。沒有 days 的班級／學期
+  // （舊 plan、VEX班、創客班）才走原本的推導路徑。
+  function explicitDays(className, semester) {
+    const d = state.plan?.schedule?.[className]?.days?.[semester];
+    return Array.isArray(d) && d.length ? d : null;
+  }
+
+  // 課節表只寫「這天有幾節」，不寫第幾節。節次由該班的 weekly_slots 取該星期的
+  // 前 N 個（依節次排序 —— weekly_slots 的陣列順序不保證照節次排）。
+  // 該星期沒排課就退回該班第一個時段：26-27 只有[class-C]／乙 2027-04-24（星期六）
+  // 這一格，課節表上沒有時間可抄。
+  function slotsForDay(slotsByDay, dow, n) {
+    const have = (slotsByDay[dow] || []).slice().sort((a, b) => a.period - b.period);
+    const out = [];
+    for (let k = 0; k < n; k++) out.push(have[k] || have[have.length - 1] || { period: null, time: '' });
+    return out;
+  }
+
+  function groupSlotsByDay(slots) {
+    const byDay = {};
+    for (const s of slots) {
+      const dn = DAYS[s.day];
+      if (!byDay[dn]) byDay[dn] = [];
+      byDay[dn].push(s);
+    }
+    return byDay;
+  }
+
+  // 產生一個班一個學期的全部課堂。generateLessonSlots 與 regenerateClassLessons
+  // 共用這一段，兩邊才不會各自漂掉。
+  // oldLessons 有傳就沿用其中的勾選／備註／主題覆寫（重新產生時用）。
+  function buildClassLessons(className, semester, oldLessons) {
+    const info = state.plan?.schedule?.[className];
+    if (!info) return [];
+    const slots = info.weekly_slots || [];
+    const days = explicitDays(className, semester);
+    if (!days && slots.length === 0) return [];
+
+    const slotsByDay = groupSlotsByDay(slots);
+    const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
+    const shift = state.progress?.classes?.[className]?.[semester]?.shift_count || 0;
+
+    // 內容一律攤成逐節的清單，「順延」照舊只位移內容、不動日期。
+    const content = days
+      ? days.flatMap(d => Array(Math.max(1, d.periods || 1)).fill({ label: d.content || '', chapter: '' }))
+      : flattenContent(className, semester);
+
+    // 先把「哪一天、第幾節」列出來，兩條路徑最後都收斂成同一種形狀。
+    const plan = [];
+    if (days) {
+      for (const d of days) {
+        const dow = dayOfWeek(parseDate(d.date));
+        const n = Math.max(1, d.periods || 1);
+        const daySlots = slotsForDay(slotsByDay, dow, n);
+        for (let k = 0; k < n; k++) plan.push({ date: d.date, dow, slot: daySlots[k], nth: k + 1 });
+      }
+    } else {
+      const holidaySet = buildHolidaySet();
+      const examRanges = buildExamRanges();
+      const ranges = getSemesterRanges();
+      const range = semester === 'semester1' ? ranges.s1 : ranges.s2;
+      for (let d = new Date(range.start); d <= range.end; d = addDays(d, 1)) {
+        const dow = dayOfWeek(d);
+        if (!slotDayNums.includes(dow)) continue;
+        const dateStr = fmtDate(d);
+        if (isHoliday(dateStr, holidaySet)) continue;
+        if (isExamDay(dateStr, examRanges)) continue;
+        const daySlots = (slotsByDay[dow] || []).slice().sort((a, b) => a.period - b.period);
+        for (let k = 0; k < daySlots.length; k++) plan.push({ date: dateStr, dow, slot: daySlots[k], nth: k + 1 });
+      }
+    }
+
+    // 課堂的身分是「日期＋當天第幾節」，不是名次。名次會因為 plan 或順延而整體
+    // 位移，用它當鍵會讓老師勾的、寫的備註貼到別的日期上。
+    const semTag = semester === 'semester1' ? 's1' : 's2';
+    const seen = new Set();
+    const out = [];
+    for (const p of plan) {
+      const idx = out.length;
+      const c = content[(idx + shift) % content.length] || { label: '(待補)' };
+      const label = c.label || '(待補)';
+      const id = `${className}_${semTag}_${p.date}_${p.nth}`;
+      if (seen.has(id)) console.warn('課堂 id 重複，findLesson 會找到錯的一節：', id);
+      seen.add(id);
+      const old = oldLessons?.find(x => x.id === id);
+      out.push({
+        id,
+        class: className,
+        semester,
+        lessonNum: idx + 1,
+        seq: p.nth,                 // 同一天的第幾節，也是存檔時的身分
+        date: p.date,
+        dayOfWeek: DAY_NAMES[p.dow],
+        time: p.slot.time,
+        period: p.slot.period,
+        topic: isOverridden(old) ? old.topic : label,
+        baseTopic: label,           // 產生時的主題，用來判斷老師有沒有改過
+        chapter: c.chapter || '',
+        done: old?.done || false,
+        note: old?.note || '',
+        hw: old?.hw || null,
+        postponed: old?.postponed || false
+      });
+    }
+    return out;
+  }
+
   function generateLessonSlots() {
     if (!state.plan) return;
-    const holidaySet = buildHolidaySet();
-    const examRanges = buildExamRanges();
-    const { s1, s2 } = getSemesterRanges();
-    const sem1Start = s1.start;
-    const sem1End = s1.end;
-    const sem2Start = s2.start;
-    const sem2End = s2.end;
-
     const allLessons = {};
 
-    for (const [className, info] of Object.entries(state.plan.schedule)) {
-      const slots = info.weekly_slots || [];
-      if (slots.length === 0) continue;
-
-      const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
-      const slotsByDay = {};
-      for (const s of slots) {
-        const dn = DAYS[s.day];
-        if (!slotsByDay[dn]) slotsByDay[dn] = [];
-        slotsByDay[dn].push(s);
-      }
-
-      const content1 = flattenContent(className, 'semester1');
-      const content2 = flattenContent(className, 'semester2');
-      const lessons = [];
-      let idx1 = 0, idx2 = 0;
-      let shift1 = 0, shift2 = 0;
-
-      // Get existing shift counts from progress
-      const prog = state.progress?.classes?.[className];
-      if (prog?.semester1?.shift_count) shift1 = prog.semester1.shift_count;
-      if (prog?.semester2?.shift_count) shift2 = prog.semester2.shift_count;
-
-      // Generate semester 1
-      for (let d = new Date(sem1Start); d <= sem1End; d = addDays(d, 1)) {
-        const dow = dayOfWeek(d);
-        if (!slotDayNums.includes(dow)) continue;
-        const dateStr = fmtDate(d);
-        if (isHoliday(dateStr, holidaySet)) continue;
-        if (isExamDay(dateStr, examRanges)) continue;
-
-        const daySlots = slotsByDay[dow];
-        for (const slot of daySlots) {
-          const contentIdx = idx1 + shift1;
-          const content = content1[contentIdx % content1.length] || { label: '(待補)' };
-          lessons.push({
-            id: `${className}_s1_${idx1}`,
-            class: className,
-            semester: 'semester1',
-            lessonNum: idx1 + 1,
-            date: dateStr,
-            dayOfWeek: DAY_NAMES[dow],
-            time: slot.time,
-            period: slot.period,
-            topic: content.label,
-            baseTopic: content.label,   // 產生時的主題，用來判斷老師有沒有改過
-            chapter: content.chapter,
-            done: false,
-            note: '',
-            hw: null,
-            postponed: false
-          });
-          idx1++;
-        }
-      }
-
-      // Generate semester 2
-      for (let d = new Date(sem2Start); d <= sem2End; d = addDays(d, 1)) {
-        const dow = dayOfWeek(d);
-        if (!slotDayNums.includes(dow)) continue;
-        const dateStr = fmtDate(d);
-        if (isHoliday(dateStr, holidaySet)) continue;
-        if (isExamDay(dateStr, examRanges)) continue;
-
-        const daySlots = slotsByDay[dow];
-        for (const slot of daySlots) {
-          const contentIdx = idx2 + shift2;
-          const content = content2[contentIdx % content2.length] || { label: '(待補)' };
-          lessons.push({
-            id: `${className}_s2_${idx2}`,
-            class: className,
-            semester: 'semester2',
-            lessonNum: idx2 + 1,
-            date: dateStr,
-            dayOfWeek: DAY_NAMES[dow],
-            time: slot.time,
-            period: slot.period,
-            topic: content.label,
-            baseTopic: content.label,   // 產生時的主題，用來判斷老師有沒有改過
-            chapter: content.chapter,
-            done: false,
-            note: '',
-            hw: null,
-            postponed: false
-          });
-          idx2++;
-        }
-      }
-
-      allLessons[className] = lessons;
+    for (const className of Object.keys(state.plan.schedule)) {
+      const slots = state.plan.schedule[className]?.weekly_slots || [];
+      if (slots.length === 0
+        && !explicitDays(className, 'semester1')
+        && !explicitDays(className, 'semester2')) continue;
+      allLessons[className] = [
+        ...buildClassLessons(className, 'semester1'),
+        ...buildClassLessons(className, 'semester2')
+      ];
     }
 
     state.lessons = allLessons;
@@ -536,24 +557,79 @@
   }
 
   // ============ DATA: MERGE PROGRESS INTO LESSONS ============
+  function hasDate(rec) { return /^\d{4}-\d{2}-\d{2}$/.test(rec?.date || ''); }
+  function lessonKey(l) { return `${l.date}#${l.seq}`; }
+
+  // 課節表有一天只寫了節數、沒寫節次：[class-C]／乙 2027-04-24（星期六），
+  // 兩班的 weekly_slots 都沒有星期六。那一節的 period 是 null，寧可少顯示一段，
+  // 也不要編一個不存在的節次或時間出來。
+  function periodLabel(l) {
+    return Number.isInteger(l?.period) ? `第${l.period}節` : '';
+  }
+  function periodSpan(l) {
+    const p = periodLabel(l);
+    return p ? `<span>${p}</span>` : '';
+  }
+  function classPeriod(l) {
+    const p = periodLabel(l);
+    return p ? `${l.class} ${p}` : l.class;
+  }
+
+  // 課堂紀錄的排序與身分都以「日期＋當天第幾節」為準。lesson 只是名次，換 plan
+  // 或按順延就會整體位移，不能拿來當身分。
+  function compareRecords(a, b) {
+    const da = hasDate(a) ? a.date : '';
+    const db = hasDate(b) ? b.date : '';
+    if (da !== db) return da < db ? -1 : 1;
+    const sa = a.seq || a.lesson || 0;
+    const sb = b.seq || b.lesson || 0;
+    if (sa !== sb) return sa - sb;
+    return (a.lesson || 0) - (b.lesson || 0);
+  }
+
+  // 把一組紀錄依「日期＋當天第幾節」編號。同一天有多節時，第幾節由 seq 決定；
+  // 沒有 seq 的舊紀錄就依排序後的名次補上。
+  // 本機與遠端要各算一次，不能共用計數器 —— 共用會讓遠端接著本機的數字往下數，
+  // 兩邊的鍵就對不起來。
+  function recordKeyer() {
+    const nth = new Map();
+    return rec => {
+      if (!hasDate(rec)) return `n${rec.lesson}`;
+      const c = (nth.get(rec.date) || 0) + 1;
+      nth.set(rec.date, c);
+      return `${rec.date}#${rec.seq || c}`;
+    };
+  }
+
   function mergeProgress() {
     if (!state.progress?.classes) return;
     for (const [className, classData] of Object.entries(state.progress.classes)) {
-      if (!state.lessons[className]) continue;
+      const classLessons = state.lessons[className];
+      if (!classLessons) continue;
       for (const semKey of ['semester1', 'semester2']) {
         const semData = classData[semKey];
         if (!semData?.lessons) continue;
-        for (const rec of semData.lessons) {
-          const lesson = state.lessons[className].find(
-            l => l.semester === semKey && l.lessonNum === rec.lesson
-          );
-          if (lesson) {
-            lesson.done = rec.done || false;
-            lesson.note = rec.note || '';
-            lesson.hw = rec.hw || null;
-            lesson.postponed = rec.postponed || false;
-            if (rec.topic_override) lesson.topic = rec.topic_override;
-          }
+
+        const byKey = new Map();
+        const byNum = new Map();
+        for (const l of classLessons) {
+          if (l.semester !== semKey) continue;
+          byKey.set(lessonKey(l), l);
+          byNum.set(l.lessonNum, l);
+        }
+
+        const keyOf = recordKeyer();
+        for (const rec of semData.lessons.slice().sort(compareRecords)) {
+          // 日期優先，而且有日期就只用日期。退回名次配只給完全沒日期的舊紀錄 ——
+          // 有日期的紀錄配不到，代表那一節在現在的 plan 上不存在（孤兒），
+          // 用名次硬配會把它貼到別的日期上，正是要避免的事。
+          const lesson = hasDate(rec) ? byKey.get(keyOf(rec)) : byNum.get(rec.lesson);
+          if (!lesson) continue;      // 孤兒：原樣留在 state.progress，存檔時帶下去
+          lesson.done = rec.done || false;
+          lesson.note = rec.note || '';
+          lesson.hw = rec.hw || null;
+          lesson.postponed = rec.postponed || false;
+          if (rec.topic_override) lesson.topic = rec.topic_override;
         }
       }
     }
@@ -595,6 +671,9 @@
   function buildProgressData() {
     const progress = { _meta: { ...(state.progress?._meta || {}) }, classes: {} };
     progress._meta.version = '1.0';
+    // schema 2 = 逐節紀錄多了 seq（同一天的第幾節），合併的鍵從 lesson 名次改成
+    // 「日期＋seq」。舊版 app 仍用名次當鍵，兩版同時寫會撞號，所以存檔時要提醒。
+    progress._meta.schema = 2;
     progress._meta.last_modified = stampNow();
     const now = progress._meta.last_modified;
 
@@ -605,29 +684,48 @@
         const prevSem = state.progress?.classes?.[className]?.[semKey];
         const prevRecords = prevSem?.lessons || [];
 
+        const byKey = new Map();
+        const byNum = new Map();
+        const keyOf = recordKeyer();
+        for (const r of prevRecords.slice().sort(compareRecords)) {
+          if (hasDate(r)) byKey.set(keyOf(r), r);
+          else byNum.set(r.lesson, r);
+        }
+
+        const claimed = new Set();
+        const emitted = semLessons.map(l => {
+          const prev = byKey.get(lessonKey(l)) || byNum.get(l.lessonNum);
+          if (prev) claimed.add(prev);
+          // 碰過的蓋新時間戳；沒碰過的沿用載入時帶進來的值。
+          // 這裡刻意不給沒有值的紀錄補一個「現在」—— 那會讓每一筆沒碰過的課堂
+          // 都被當成有變動而寫進文件（稀疏過濾整段失效），而且會讓它們在合併時
+          // 無條件贏過別台裝置真正較新的紀錄。代理值改在 mergeProgressData 裡給。
+          const updated_at = state.dirtyLessons.has(l.id) ? now : prev?.updated_at;
+          // 最後一項是關鍵：紀錄一旦被碰過就永遠保留。少了它，「取消打卡」會讓
+          // 所有欄位變成 falsy 而整筆消失，合併時遠端較舊的 done:true 就會復活。
+          if (!(l.done || l.note || l.hw || l.postponed || isOverridden(l) || updated_at)) return null;
+          return {
+            lesson: l.lessonNum,
+            date: l.date,
+            seq: l.seq,
+            done: l.done,
+            note: l.note || undefined,
+            hw: l.hw || undefined,
+            postponed: l.postponed || undefined,
+            topic_override: isOverridden(l) ? l.topic : undefined,
+            updated_at
+          };
+        }).filter(Boolean);
+
+        // 配不到目前任何一節的紀錄原樣帶著走。老師真的上過、但 plan 上沒有這一節
+        // （例：[class-E] 9/11 開學彌撒）不該因為存一次檔就消失 —— 這裡是每次存檔
+        // 都會跑的路徑，少了這段，切換 plan 後的第一次存檔就把它清掉了。
+        // 原樣 = 不補 updated_at，否則它會在往後每次合併都無條件贏過別台裝置。
+        const orphans = prevRecords.filter(r => !claimed.has(r));
+
         classData[semKey] = {
           shift_count: prevSem?.shift_count || 0,
-          lessons: semLessons.map(l => {
-            const prev = prevRecords.find(r => r.lesson === l.lessonNum);
-            // 碰過的蓋新時間戳；沒碰過的沿用載入時帶進來的值。
-            // 這裡刻意不給沒有值的紀錄補一個「現在」—— 那會讓每一筆沒碰過的課堂
-            // 都被當成有變動而寫進文件（稀疏過濾整段失效），而且會讓它們在合併時
-            // 無條件贏過別台裝置真正較新的紀錄。代理值改在 mergeProgressData 裡給。
-            const updated_at = state.dirtyLessons.has(l.id) ? now : prev?.updated_at;
-            // 最後一項是關鍵：紀錄一旦被碰過就永遠保留。少了它，「取消打卡」會讓
-            // 所有欄位變成 falsy 而整筆消失，合併時遠端較舊的 done:true 就會復活。
-            if (!(l.done || l.note || l.hw || l.postponed || isOverridden(l) || updated_at)) return null;
-            return {
-              lesson: l.lessonNum,
-              date: l.date,
-              done: l.done,
-              note: l.note || undefined,
-              hw: l.hw || undefined,
-              postponed: l.postponed || undefined,
-              topic_override: isOverridden(l) ? l.topic : undefined,
-              updated_at
-            };
-          }).filter(Boolean)
+          lessons: [...emitted, ...orphans].sort(compareRecords)
         };
         if (prevSem?.shift_count_at) classData[semKey].shift_count_at = prevSem.shift_count_at;
       }
@@ -658,9 +756,14 @@
     const remoteStamp = remote._meta?.last_modified || '';
     const localFallback = localPrevStamp || localStamp;
     const ts = (rec, docStamp) => rec?.updated_at || docStamp;
-    // 比對「內容」時要忽略 updated_at：時間戳不同不等於資料不同，
-    // 否則每次合併都會誤報一堆「被取代」，通知就失去意義了。
-    const recKey = r => { const { updated_at, ...rest } = r; return JSON.stringify(rest); };
+    // 比對「內容」時只看語意欄位：時間戳不同不等於資料不同，否則每次合併都會
+    // 誤報一堆「被取代」，通知就失去意義了。lesson 是可變的名次、seq 是新舊版
+    // 的差異，兩者都不算資料 —— 把它們算進去，光是換版本就會讓每一筆都被當成
+    // 「本機被取代」，然後每次存檔都逼出兩份快照。
+    const recKey = r => JSON.stringify([
+      hasDate(r) ? r.date : '', !!r.done, r.note || '', r.hw || null,
+      !!r.postponed, r.topic_override || ''
+    ]);
 
     let lostLocal = 0, lostRemote = 0;
     const merged = { _meta: { ...(local._meta || {}) }, classes: {} };
@@ -691,24 +794,30 @@
           if (ls.shift_count_at) out.shift_count_at = ls.shift_count_at;
         }
 
-        const byLesson = new Map();
-        for (const r of (ls.lessons || [])) byLesson.set(r.lesson, r);
-        for (const r of (rs.lessons || [])) {
-          const cur = byLesson.get(r.lesson);
-          if (!cur) { byLesson.set(r.lesson, r); continue; }
+        // 鍵用「日期＋當天第幾節」，不能用 lesson 名次：換 plan 之後同一筆紀錄在
+        // 兩台裝置上的名次會不同，而且孤兒紀錄會跟線上課堂撞號 —— 撞到就有
+        // 一筆被無聲吃掉，連「被取代 N 筆」都不會報。
+        const byKey = new Map();
+        const localKeyOf = recordKeyer();
+        for (const r of (ls.lessons || []).slice().sort(compareRecords)) byKey.set(localKeyOf(r), r);
+        const remoteKeyOf = recordKeyer();
+        for (const r of (rs.lessons || []).slice().sort(compareRecords)) {
+          const k = remoteKeyOf(r);
+          const cur = byKey.get(k);
+          if (!cur) { byKey.set(k, r); continue; }
           const lt = ts(cur, localFallback);
           const rt = ts(r, remoteStamp);
           const differs = recKey(cur) !== recKey(r);
           if (rt > lt) {
             if (differs) lostLocal++;                    // 遠端較新，本機這筆被取代
-            byLesson.set(r.lesson, r);
+            byKey.set(k, r);
           } else if (lt > rt) {
             if (differs) lostRemote++;                   // 本機較新，遠端這筆被取代
           } else if (differs) {
             lostRemote++;                                // 平手時本機勝（＝老師手上這台）
           }
         }
-        out.lessons = [...byLesson.values()].sort((a, b) => a.lesson - b.lesson);
+        out.lessons = [...byKey.values()].sort(compareRecords);
         merged.classes[cls][sem] = out;
       }
     }
@@ -826,6 +935,14 @@
 
       let outgoing = data;
       if (!force && !readErr && remote?._meta?.last_modified) {
+        // 雲端沒有 schema 2 = 上一次寫它的是舊版 app，合併的鍵還是 lesson 名次。
+        // 新舊版同時寫會撞號，先把遠端整份留一份底。不擋存檔 —— 讓老師的編輯
+        // 卡在離線，比偶爾多一份快照糟得多。每台裝置每次開啟只吵一次。
+        if (!remote._meta.schema && !state.warnedOldSchema) {
+          state.warnedOldSchema = true;
+          takeSnapshot('雲端進度是舊版 app 寫的（尚未升級）', remote, true);
+          toast('有一台裝置的 app 還是舊版，已先備份雲端進度', 'warning');
+        }
         // 遠端有別台裝置寫過的東西 → 逐節合併，不再叫老師二選一。
         // 這裡不比對 last_modified 是否相等：buildProgressData() 每次都蓋新時間戳，
         // 兩邊永遠不會相等；沒有東西可合併時合併本來就是 no-op。
@@ -1291,7 +1408,7 @@
                 <div style="min-width:0">
                   <div class="lesson-class">${escHtml(l.class)}</div>
                   <div class="lesson-meta">
-                    <span>第${l.period}節</span>
+                    ${periodSpan(l)}
                     <span>${l.dayOfWeek} ${l.time}</span>
                     <span>原定 ${fmtDisplay(l.date)}</span>
                   </div>
@@ -1412,7 +1529,7 @@
             <div style="min-width:0">
               <div class="lesson-class">${escHtml(l.class)}${statusBadge}</div>
               <div class="lesson-meta">
-                <span>第${l.period}節</span>
+                ${periodSpan(l)}
                 <span>${l.dayOfWeek} ${l.time}</span>
                 ${l.postponed ? '<span style="color:var(--warning)">⏸ 已延期</span>' : ''}
               </div>
@@ -1941,7 +2058,7 @@
     l.done = !l.done;
     markLessonDirty(id);
     renderAll();
-    toast(l.done ? `✅ ${l.class} 第${l.period}節已完成` : `已取消完成`, l.done ? 'success' : 'info');
+    toast(l.done ? `✅ ${classPeriod(l)}已完成` : `已取消完成`, l.done ? 'success' : 'info');
   }
 
   function updateTopic(id, value) {
@@ -1964,7 +2081,7 @@
     l.postponed = !l.postponed;
     markLessonDirty(id);
     renderAll();
-    toast(l.postponed ? `⏸ ${l.class} 第${l.period}節已延期` : `▶ ${l.class} 第${l.period}節已取消延期`, l.postponed ? 'warning' : 'success');
+    toast(l.postponed ? `⏸ ${classPeriod(l)}已延期` : `▶ ${classPeriod(l)}已取消延期`, l.postponed ? 'warning' : 'success');
   }
 
   function autoShift(id) {
@@ -2001,82 +2118,16 @@
     }
   }
 
+  // 只重算一個班的課堂，並把記憶體裡的勾選／備註／主題覆寫帶過去。
+  // 帶得過去是因為 id 認的是「日期＋當天第幾節」—— 換 plan 或按順延讓名次整體
+  // 位移時，同一個 id 仍然指向同一天，不會把老師勾的貼到別的日期。
   function regenerateClassLessons(cls) {
-    const info = state.plan?.schedule?.[cls];
-    if (!info) return;
-    const holidaySet = buildHolidaySet();
-    const examRanges = buildExamRanges();
-    const { s1, s2 } = getSemesterRanges();
-    const sem1Start = s1.start;
-    const sem1End = s1.end;
-    const sem2Start = s2.start;
-    const sem2End = s2.end;
-    const slots = info.weekly_slots || [];
-    const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
-    const slotsByDay = {};
-    for (const s of slots) {
-      const dn = DAYS[s.day];
-      if (!slotsByDay[dn]) slotsByDay[dn] = [];
-      slotsByDay[dn].push(s);
-    }
-
-    const content1 = flattenContent(cls, 'semester1');
-    const content2 = flattenContent(cls, 'semester2');
-    const lessons = [];
+    if (!state.plan?.schedule?.[cls]) return;
     const oldLessons = state.lessons[cls] || [];
-    let idx1 = 0, idx2 = 0;
-    const shift1 = state.progress.classes[cls]?.semester1?.shift_count || 0;
-    const shift2 = state.progress.classes[cls]?.semester2?.shift_count || 0;
-
-    for (let d = new Date(sem1Start); d <= sem1End; d = addDays(d, 1)) {
-      const dow = dayOfWeek(d);
-      if (!slotDayNums.includes(dow)) continue;
-      const dateStr = fmtDate(d);
-      if (isHoliday(dateStr, holidaySet)) continue;
-      if (isExamDay(dateStr, examRanges)) continue;
-      const daySlots = slotsByDay[dow];
-      for (const slot of daySlots) {
-        const contentIdx = idx1 + shift1;
-        const content = content1[contentIdx % content1.length] || { label: '(待補)' };
-        const id = `${cls}_s1_${idx1}`;
-        const old = oldLessons.find(x => x.id === id);
-        lessons.push({
-          id, class: cls, semester: 'semester1', lessonNum: idx1 + 1,
-          date: dateStr, dayOfWeek: DAY_NAMES[dow], time: slot.time, period: slot.period,
-          topic: isOverridden(old) ? old.topic : content.label, chapter: content.chapter,
-          baseTopic: content.label,
-          done: old?.done || false, note: old?.note || '', hw: old?.hw || null,
-          postponed: old?.postponed || false
-        });
-        idx1++;
-      }
-    }
-
-    for (let d = new Date(sem2Start); d <= sem2End; d = addDays(d, 1)) {
-      const dow = dayOfWeek(d);
-      if (!slotDayNums.includes(dow)) continue;
-      const dateStr = fmtDate(d);
-      if (isHoliday(dateStr, holidaySet)) continue;
-      if (isExamDay(dateStr, examRanges)) continue;
-      const daySlots = slotsByDay[dow];
-      for (const slot of daySlots) {
-        const contentIdx = idx2 + shift2;
-        const content = content2[contentIdx % content2.length] || { label: '(待補)' };
-        const id = `${cls}_s2_${idx2}`;
-        const old = oldLessons.find(x => x.id === id);
-        lessons.push({
-          id, class: cls, semester: 'semester2', lessonNum: idx2 + 1,
-          date: dateStr, dayOfWeek: DAY_NAMES[dow], time: slot.time, period: slot.period,
-          topic: isOverridden(old) ? old.topic : content.label, chapter: content.chapter,
-          baseTopic: content.label,
-          done: old?.done || false, note: old?.note || '', hw: old?.hw || null,
-          postponed: old?.postponed || false
-        });
-        idx2++;
-      }
-    }
-
-    state.lessons[cls] = lessons;
+    state.lessons[cls] = [
+      ...buildClassLessons(cls, 'semester1', oldLessons),
+      ...buildClassLessons(cls, 'semester2', oldLessons)
+    ];
   }
 
   // 點月曆的日期格 → 當天的完整清單。格子只有六十幾 px 寬，塞不下的都會被
@@ -2130,7 +2181,7 @@
         return `<button type="button" class="day-modal-item" data-id="${escHtml(l.id)}">
             <span class="day-modal-dot" style="background:${color}"></span>
             <span class="day-modal-main">
-              <span class="day-modal-line1">${escHtml(l.class)}<span class="day-modal-period">第${l.period}節 ${escHtml(l.time)}</span></span>
+              <span class="day-modal-line1">${escHtml(l.class)}<span class="day-modal-period">${escHtml(periodLabel(l))} ${escHtml(l.time)}</span></span>
               <span class="day-modal-line2">${escHtml(l.topic)}</span>
             </span>
             <span class="day-modal-status ${statusCls}">${status}</span>
@@ -2167,7 +2218,7 @@
     const title = $('modal-title');
     const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
 
-    title.textContent = `${l.class} 第${l.period}節`;
+    title.textContent = classPeriod(l);
     body.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
         <span class="badge ${l.done ? 'badge-ok' : 'badge-behind'}">${l.done ? '已完成' : '未完成'}</span>
@@ -2230,7 +2281,7 @@
     const overlay = $('modal-overlay');
     const body = $('modal-body');
     const title = $('modal-title');
-    title.textContent = `${l.class} 第${l.period}節 — 作業`;
+    title.textContent = `${classPeriod(l)} — 作業`;
     const hwData = l.hw && typeof l.hw === 'object' ? l.hw : (l.hw ? { topic: l.hw } : {});
     body.innerHTML = `
       <div class="form-group">
