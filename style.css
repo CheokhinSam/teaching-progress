@@ -244,7 +244,6 @@ body {
 .lesson-card.completed { border-left-color: var(--success); }
 .lesson-card.today { border-left-color: var(--primary); }
 .lesson-card.overdue { border-left-color: var(--danger); }
-.lesson-card.shifted { border-left-color: var(--warning); opacity: 0.7; }
 
 /* 「今天全部完成」那條。放在課堂清單最上面，補登隔了幾天的進度時用。 */
 .day-actions {
@@ -264,35 +263,12 @@ body {
   color: var(--gray-500);
 }
 
-/* 已延期待補清單。延期之後就沒有地方再列出來，老師標記完就忘了補。 */
-.postponed-panel {
-  margin-bottom: 20px;
-  padding: 12px;
-  background: var(--warning-light);
-  border-radius: 10px;
-}
-
-.postponed-head {
-  font-size: 13px;
-  font-weight: 600;
-  color: #92400e;
-  margin-bottom: 8px;
-}
-
-.postponed-panel .lesson-card {
-  background: white;
-  margin-bottom: 8px;
-  opacity: 1;   /* 這裡是要老師採取行動的，不要跟著 .shifted 一起淡化 */
-}
-
-.postponed-panel .lesson-card:last-child { margin-bottom: 0; }
-
 .lesson-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  /* 延期／順延／作業搬到標題列右邊之後，窄螢幕塞不下時要能自己換行，
+  /* 加到下一節／作業搬到標題列右邊之後，窄螢幕塞不下時要能自己換行，
      而不是把班級名擠成一團。 */
   flex-wrap: wrap;
 }
@@ -311,8 +287,7 @@ body {
   margin-top: 4px;
 }
 
-/* font-size 留在容器上：已延期待補清單（renderToday）用的是同一組類別，
-   但裡面只有一行純文字，不會經過 .inline-edit。 */
+/* font-size 留在容器上：裡面的 .inline-edit 只是把輸入框裝成一行文字。 */
 .lesson-topic {
   font-size: 14px;
   color: var(--gray-700);
@@ -360,7 +335,7 @@ body {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
-/* 延期／順延／作業。本來自己佔一整行（含 margin-top 約 44px），
+/* 加到下一節／作業。本來自己佔一整行（含 margin-top 約 44px），
    移到標題列右邊之後每張卡少一行 —— 一屏就能多放一節課。
    align-self 置中是配合左邊 44px 的打勾鈕，不然按鈕會浮在標題列頂端。 */
 .lesson-actions {
@@ -651,7 +626,6 @@ textarea { resize: vertical; min-height: 80px; }
 .day-modal-status { font-size: 12px; font-weight: 600; flex-shrink: 0; }
 .day-modal-status.done { color: var(--success); }
 .day-modal-status.overdue { color: var(--danger); }
-.day-modal-status.shifted { color: #92400e; }
 .day-modal-status.pending { color: var(--gray-400); }
 
 .day-modal-empty {
@@ -891,7 +865,10 @@ textarea { resize: vertical; min-height: 80px; }
   display: grid;
   /* 週一到週六 6 欄。星期六沒有固定課，但校曆、考試、功課截止會落在週六 ——
      不排那一欄的話，那些日子在月曆上等於不存在。星期日仍然不排。 */
-  grid-template-columns: repeat(6, 1fr);
+  /* 一定要寫 minmax(0, 1fr) 而不是 1fr：1fr 的最小值是內容的 min-content，
+     格子裡的藥丸（white-space: nowrap）會把整欄撐到兩三百 px。電腦上夠闊
+     看不出來，一到手機 6 欄就爆開，只看得到 1.5 欄。 */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -902,6 +879,10 @@ textarea { resize: vertical; min-height: 80px; }
   padding: 8px;
   box-shadow: var(--shadow);
   transition: var(--transition);
+  /* 同上：格線可以縮到 0，但格子本身也要肯縮，裡面的 nowrap 藥丸才不會
+     溢出到隔壁那天。溢出的一律切掉。 */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .cal-day:hover { box-shadow: var(--shadow-md); }
@@ -995,6 +976,10 @@ textarea { resize: vertical; min-height: 80px; }
   display: block;
 }
 
+/* 打勾／未打勾的方框。狀態本來就由底色（綠／藍／紅）表示了，手機上
+   每格只有 54px 闊，把這兩個字元收起來換主題的顯示寬度。 */
+.cal-lesson-mark { margin-right: 3px; }
+
 /* ========= WEEK NAV ========= */
 .week-nav {
   display: flex;
@@ -1087,14 +1072,16 @@ textarea { resize: vertical; min-height: 80px; }
 @media (max-width: 768px) {
   .app-body { flex-direction: column; }
 
+  /* 八個班級橫向排成一條一定塞唔落（8×63px ≈ 504px），原本讓它左右滑，
+     結果最後一個班永遠被切一半，看起來像壞掉。改成換行排兩行，全部看得見。 */
   .sidebar {
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--gray-200);
     padding: 8px;
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
-    overflow-x: auto;
     flex-shrink: 0;
   }
 
@@ -1115,26 +1102,48 @@ textarea { resize: vertical; min-height: 80px; }
 
   .stats-line { gap: 5px; padding: 5px 12px; }
 
+  /* 「◀ 前一天 / 2026年10月2日 週五 / 後一天 ▶ / 今天」四件東西擠在 358px
+     裡，按鈕會斷成「◀ 前一／天」「今／天」。窄螢幕改成兩行：日期自己一行
+     居中，三顆按鈕下面平分。用 flex-wrap + order 做，不用改 HTML。 */
+  .week-nav { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+  .week-nav > span { order: -1; flex: 1 0 100%; text-align: center; }
+  .week-nav .btn { flex: 1 1 0; justify-content: center; }
+
   .comparison-grid { grid-template-columns: 1fr; }
   /* 原本寫的是 .calendar-grid，這個類別不存在，所以這條規則從來沒生效過。
      實際類別是 .cal-month-grid（週一到週五 5 欄）。窄螢幕上把格子收緊，
      而不是改成單欄 —— 單欄會變成二十幾格的長條清單，反而看不出一個月的樣子。 */
-  /* 日曆是整個 app 字最小的地方：課堂 11px、班級 9px、標記 10px，全塞在約
-     65px 寬的格子裡。原本這裡把 .cal-lesson 再降到 10px，比基礎值還小 ——
-     方向是反的，小螢幕反而更難讀。改成放大，並把每個藥丸壓成一行（班級與
-     主題併排），用省下來的高度換字級：藥丸變矮，字反而變大。 */
-  /* 多了星期六那一欄之後，375px 的手機每格只剩 54px 寬（本來 65px）。
-     間距與內距各收一點，把寬度還給格子 —— 不然「[class-A]」三個字會被截掉。 */
+  /* 6 欄 × 54px 是手機上實際的寬度（390px 手機扣掉 padding 與格線間距）。
+     一格 54px 只放得落 4 個中文字，所以藥丸拆成兩行：第一行班級（3 個字，
+     顏色已經分得出是哪一班，但寫出來不用回頭查圖例），第二行主題截字。
+     打勾的方框收起來，把那 2 個字元的寬度讓給主題。 */
   .cal-month-grid { gap: 3px; }
-  .cal-day { min-height: 100px; padding: 5px; }
-  .cal-day-num { font-size: 16px; }
-  .cal-lesson { font-size: 12px; }
-  .cal-lesson-class { font-size: 11px; display: inline; margin-right: 4px; }
-  .cal-assess-chip { font-size: 11px; }
-  .cal-assess-n { font-size: 10px; }
-  .cal-note-chip { font-size: 11px; }
-  .cal-holiday-tag { font-size: 11px; }
-  .cal-exam-tag { font-size: 11px; }
+  .cal-day { min-height: 48px; padding: 5px; }
+  .cal-day-num { font-size: 14px; }
+  .cal-day.today .cal-day-num { width: 20px; height: 20px; font-size: 12px; }
+  /* 假期／統測標籤在 54px 裡一定斷成好幾行，把格子撐高。切一行、截字，
+     底色（粉紅＝假期、琥珀＝統測週）本身已經講了是甚麼日子。 */
+  .cal-day-tags { max-width: 100%; }
+  .cal-holiday-tag, .cal-exam-tag {
+    font-size: 9px;
+    padding: 1px 4px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cal-lesson { font-size: 10px; padding: 2px 4px; line-height: 1.35; }
+  .cal-lesson-class { font-size: 10px; display: block; opacity: 0.85; }
+  .cal-lesson-mark { display: none; }
+  .cal-lesson-topic { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cal-assess { gap: 2px; margin-bottom: 3px; }
+  .cal-assess-chip, .cal-note-chip { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* 功課截止的 chip 基礎樣式夾兩行，在 54px 裡會變成「初二／甲：…」，
+     班級名斷成兩行看起來像壞掉。手機改成只夾一行。 */
+  .cal-note-chip { -webkit-line-clamp: 1; }
+  .cal-assess-n { font-size: 9px; }
+  .cal-legend { gap: 6px; padding: 6px 10px; margin-bottom: 10px; }
+  .cal-legend-item { font-size: 11px; }
 
   .modal { max-width: 100%; margin: 10px; }
 
@@ -1151,6 +1160,11 @@ textarea { resize: vertical; min-height: 80px; }
   .app-header .date-display { display: none; }
   /* 日期可以藏，但未同步指示不行 —— 它是要老師採取行動的 */
   .sync-banner { font-size: 11px; padding: 3px 8px; }
+
+  /* 五個分頁在 358px 裡，字 13px 不改，只把左右內距從 12px 收到 6px：
+     最闊的「今日課堂」4 字 52px + 12px 內距 = 64px，五個平分每格 71px，
+     剛好塞得下。原本 12px 內距是 76px > 71px，最後一個「⚙ 設定」就被切掉。 */
+  .nav-tab { padding: 8px 6px; }
 
   .lesson-actions { flex-wrap: wrap; }
   .lesson-actions .btn { flex: 1; justify-content: center; }

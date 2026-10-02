@@ -528,8 +528,7 @@
     return byDay;
   }
 
-  // 產生一個班一個學期的全部課堂。generateLessonSlots 與 regenerateClassLessons
-  // 共用這一段，兩邊才不會各自漂掉。
+  // 產生一個班一個學期的全部課堂。八個班、兩個學期都走這一段，各處才不會漂掉。
   // oldLessons 有傳就沿用其中的勾選／備註／主題覆寫（重新產生時用）。
   function buildClassLessons(className, semester, oldLessons) {
     const info = state.plan?.schedule?.[className];
@@ -540,9 +539,8 @@
 
     const slotsByDay = groupSlotsByDay(slots);
     const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
-    const shift = state.progress?.classes?.[className]?.[semester]?.shift_count || 0;
-
-    // 內容一律攤成逐節的清單，「順延」照舊只位移內容、不動日期。
+    // 內容一律攤成逐節的清單。日期是課節表的事實，不會動；會動的只有
+    // 「每一節配到哪一條內容」，見下面 ci 的說明。
     const content = days
       ? days.flatMap(d => Array(Math.max(1, d.periods || 1)).fill({ label: d.content || '', chapter: '' }))
       : flattenContent(className, semester);
@@ -572,19 +570,25 @@
       }
     }
 
-    // 課堂的身分是「日期＋當天第幾節」，不是名次。名次會因為 plan 或順延而整體
+    // 課堂的身分是「日期＋當天第幾節」，不是名次。名次會因為 plan 而整體
     // 位移，用它當鍵會讓老師勾的、寫的備註貼到別的日期上。
     const semTag = semester === 'semester1' ? 's1' : 's2';
     const seen = new Set();
     const out = [];
+
+    // 一節配一條內容，就是照課節表的次序派下去。要改次序的話，老師是在卡片
+    // 上直接改主題，或者按「➜ 加到下一節」把這一節的內容併進下一節 ——
+    // 排課程式這邊不去猜「老師落後了」。
     for (const p of plan) {
       const idx = out.length;
-      const c = content[(idx + shift) % content.length] || { label: '(待補)' };
-      const label = c.label || '(待補)';
       const id = `${className}_${semTag}_${p.date}_${p.nth}`;
       if (seen.has(id)) console.warn('課堂 id 重複，findLesson 會找到錯的一節：', id);
       seen.add(id);
       const old = oldLessons?.find(x => x.id === id);
+
+      const c = content[idx] || { label: '(待補)' };
+      const label = c.label || '(待補)';
+
       out.push({
         id,
         class: className,
@@ -600,8 +604,7 @@
         chapter: c.chapter || '',
         done: old?.done || false,
         note: old?.note || '',
-        hw: old?.hw || null,
-        postponed: old?.postponed || false
+        hw: old?.hw || null
       });
     }
     return out;
@@ -657,7 +660,7 @@
   }
 
   // 課堂紀錄的排序與身分都以「日期＋當天第幾節」為準。lesson 只是名次，換 plan
-  // 或按順延就會整體位移，不能拿來當身分。
+  // 就會整體位移，不能拿來當身分。
   function compareRecords(a, b) {
     const da = hasDate(a) ? a.date : '';
     const db = hasDate(b) ? b.date : '';
@@ -709,7 +712,6 @@
           lesson.done = rec.done || false;
           lesson.note = rec.note || '';
           lesson.hw = rec.hw || null;
-          lesson.postponed = rec.postponed || false;
           if (rec.topic_override) lesson.topic = rec.topic_override;
         }
       }
@@ -718,7 +720,7 @@
 
   // ============ DATA: SAVE PROGRESS ============
   // 主題是否被老師手動改過。比對的是產生當下的 baseTopic，不是重算出來的內容 ——
-  // 「順延」會改變每一節對應的內容，重算會把整班的未修改課堂都誤判成覆寫。
+  // 課程表一改，每一節對應的內容就整批換過，重算會把整班的未修改課堂都誤判成覆寫。
   function isOverridden(lesson) {
     return !!lesson && lesson.topic !== lesson.baseTopic;
   }
@@ -784,7 +786,7 @@
           const updated_at = state.dirtyLessons.has(l.id) ? now : prev?.updated_at;
           // 最後一項是關鍵：紀錄一旦被碰過就永遠保留。少了它，「取消打卡」會讓
           // 所有欄位變成 falsy 而整筆消失，合併時遠端較舊的 done:true 就會復活。
-          if (!(l.done || l.note || l.hw || l.postponed || isOverridden(l) || updated_at)) return null;
+          if (!(l.done || l.note || l.hw || isOverridden(l) || updated_at)) return null;
           return {
             lesson: l.lessonNum,
             date: l.date,
@@ -792,7 +794,6 @@
             done: l.done,
             note: l.note || undefined,
             hw: l.hw || undefined,
-            postponed: l.postponed || undefined,
             topic_override: isOverridden(l) ? l.topic : undefined,
             updated_at
           };
@@ -804,6 +805,9 @@
         // 原樣 = 不補 updated_at，否則它會在往後每次合併都無條件贏過別台裝置。
         const orphans = prevRecords.filter(r => !claimed.has(r));
 
+        // shift_count 是從前的「順延」留下來的，現在已經沒有人會改它、也沒有人
+        // 讀它來排內容了。原樣帶着只是為了讓新舊裝置算出來的內容鍵一模一樣
+        // （contentKey 沒有剔除它），免得升版時白做一次全量上傳。
         classData[semKey] = {
           shift_count: prevSem?.shift_count || 0,
           lessons: [...emitted, ...orphans].sort(compareRecords)
@@ -843,7 +847,7 @@
     // 「本機被取代」，然後每次存檔都逼出兩份快照。
     const recKey = r => JSON.stringify([
       hasDate(r) ? r.date : '', !!r.done, r.note || '', r.hw || null,
-      !!r.postponed, r.topic_override || ''
+      r.topic_override || ''
     ]);
 
     let lostLocal = 0, lostRemote = 0;
@@ -863,7 +867,8 @@
         if (!ls) { merged.classes[cls][sem] = rs; continue; }
         if (!rs) { merged.classes[cls][sem] = ls; continue; }
 
-        // shift_count 是純量，一樣比時間戳。舊資料沒有 shift_count_at → 視為最舊。
+        // shift_count 是舊「順延」的遺物，兩邊都只會是 0，但是純量沒辦法逐節
+        // 合併，所以照舊比時間戳決定誰新 —— 留著讓舊裝置的資料合併時有着落。
         const lAt = ls.shift_count_at || '';
         const rAt = rs.shift_count_at || '';
         const out = {};
@@ -1275,9 +1280,9 @@
     const total = lessons.length;
     const done = lessons.filter(l => l.done).length;
     const current = lessons.find(l => !l.done);
-    // 已標「延期」的課是老師自己擱下的，不該再當成逾期來提醒。
-    // 但它仍然算在 expectedDone 裡 —— 進度確實落後了，那是 shift_count 要處理的事。
-    const overdue = lessons.filter(l => !l.done && !l.postponed && parseDate(l.date) < td).length;
+    // 逾期＝日子過了還沒勾。內容調整（改主題、「加到下一節」）不影響這裡，
+    // 那一節沒勾就是沒勾。
+    const overdue = lessons.filter(l => !l.done && parseDate(l.date) < td).length;
     const pct = total > 0 ? Math.round(done / total * 100) : 0;
     const expectedDone = lessons.filter(l => parseDate(l.date) <= td).length;
     const diff = done - expectedDone;
@@ -1442,7 +1447,7 @@
     for (const [_, lessons] of allLessons) {
       for (const l of lessons) {
         if (l.done) totalDone++;
-        if (!l.done && !l.postponed && parseDate(l.date) < td) totalOverdue++;
+        if (!l.done && parseDate(l.date) < td) totalOverdue++;
       }
     }
 
@@ -1468,41 +1473,8 @@
     $('stat-today-label').textContent = state.dayOffset === 0 ? '今日' : '當日';
     $('stat-today').textContent = `${dayDone}/${dayLessons.length}`;
 
-    // 已延期清單。「延期」是把課堂挪走，但延期之後就再也沒有地方列出來 ——
-    // 老師標記完就忘了補。這裡只列已經過去的（今天的還沒到，不必提醒）。
-    const postponed = [];
-    for (const [cls, lessons] of Object.entries(state.lessons)) {
-      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
-      for (const l of lessons) {
-        if (l.postponed && !l.done && parseDate(l.date) <= td) postponed.push(l);
-      }
-    }
-    postponed.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-
-    const postponedHtml = postponed.length === 0 ? '' : `
-      <div class="postponed-panel">
-        <div class="postponed-head">⏸ 已延期待補（${postponed.length} 節）</div>
-        ${postponed.map(l => `
-          <div class="lesson-card shifted">
-            <div class="lesson-header">
-              <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
-                <div style="min-width:0">
-                  <div class="lesson-class">${escHtml(l.class)}</div>
-                  <div class="lesson-meta">
-                    ${periodSpan(l)}
-                    <span>${l.dayOfWeek} ${l.time}</span>
-                    <span>原定 ${fmtDisplay(l.date)}</span>
-                  </div>
-                </div>
-              </div>
-              <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}">▶ 取消延期</button>
-            </div>
-            <div class="lesson-topic"><span>${escHtml(l.topic)}</span></div>
-          </div>`).join('')}
-      </div>`;
-
     if (dayLessons.length === 0) {
-      paintLessons(container, postponedHtml + `
+      paintLessons(container, `
         <div class="empty-state">
           <div class="icon">📅</div>
           <h3>${state.dayOffset === 0 ? '今天沒有課堂' : '當天沒有課堂'}</h3>
@@ -1511,16 +1483,15 @@
       return;
     }
 
-    // 「全部完成」那條只在當天還有沒勾的課時出現。已延期的不能算進來 ——
-    // markDayDone 會跳過它們，算進來會讓按鈕按了也消不掉。
-    const dayUndone = dayLessons.filter(l => !l.done && !l.postponed).length;
+    // 「全部完成」那條只在當天還有沒勾的課時出現。
+    const dayUndone = dayLessons.filter(l => !l.done).length;
     const dayBarHtml = dayUndone === 0 ? '' : `
       <div class="day-actions">
         <span class="day-actions-text">${dayUndone} 節未完成</span>
         <button class="btn btn-sm btn-success" id="day-done-all">✓ 全部完成</button>
       </div>`;
 
-    paintLessons(container, dayBarHtml + postponedHtml + dayLessons.map(l => renderLessonCard(l)).join(''));
+    paintLessons(container, dayBarHtml + dayLessons.map(l => renderLessonCard(l)).join(''));
 
     const doneAllBtn = container.querySelector('#day-done-all');
     if (doneAllBtn) doneAllBtn.addEventListener('click', () => markDayDone(viewDateStr));
@@ -1591,13 +1562,12 @@
     let statusClass = '';
     if (l.done) statusClass = 'completed';
     else if (isSameDay(ld, td)) statusClass = 'today';
-    else if (ld < td && !l.postponed) statusClass = 'overdue';
-    if (l.postponed) statusClass += ' shifted';
+    else if (ld < td) statusClass = 'overdue';
 
     const stats = getClassStats(l.class);
     const statusBadge = stats.status === 'ok' ? '' : `<span class="badge ${stats.status === 'behind' ? 'badge-behind' : 'badge-ahead'}" style="margin-left:8px">${stats.status === 'behind' ? '落後' : '領先'}</span>`;
 
-    const shiftCount = state.progress?.classes?.[l.class]?.[l.semester]?.shift_count || 0;
+    const nextLesson = nextLessonOf(l);
 
     // 主題與備註一律渲染成真的輸入框，只是平時靠 CSS 裝成一行文字（.inline-edit）。
     // 以前要按「展開」才生得出輸入框，改一個欄位得先點兩下；現在點一下就能打，
@@ -1612,13 +1582,11 @@
               <div class="lesson-meta">
                 ${periodSpan(l)}
                 <span>${l.dayOfWeek} ${l.time}</span>
-                ${l.postponed ? '<span style="color:var(--warning)">⏸ 已延期</span>' : ''}
               </div>
             </div>
           </div>
           <div class="lesson-actions">
-            <button class="btn btn-sm btn-outline post-btn" data-id="${l.id}" ${l.done ? 'disabled' : ''}>${l.postponed ? '▶ 取消延期' : '⏸ 延期'}</button>
-            <button class="btn btn-sm btn-outline shift-btn" data-id="${l.id}">${shiftCount > 0 ? `↩ 取消順延(${shiftCount})` : '⏩ 順延'}</button>
+            ${nextLesson ? `<button class="btn btn-sm btn-outline carry-btn" data-id="${l.id}" title="把這一節的內容補進 ${fmtDisplay(nextLesson.date)} 那一節，兩條一齊上">➜ 加到下一節</button>` : ''}
             <button class="btn btn-sm btn-outline hw-btn" data-id="${l.id}">📋 作業</button>
           </div>
         </div>
@@ -1673,11 +1641,8 @@
         toggleDone(btn.dataset.id);
       });
     });
-    container.querySelectorAll('.post-btn').forEach(btn => {
-      btn.addEventListener('click', () => postponeLesson(btn.dataset.id));
-    });
-    container.querySelectorAll('.shift-btn').forEach(btn => {
-      btn.addEventListener('click', () => autoShift(btn.dataset.id));
+    container.querySelectorAll('.carry-btn').forEach(btn => {
+      btn.addEventListener('click', () => carryToNext(btn.dataset.id));
     });
     container.querySelectorAll('.hw-btn').forEach(btn => {
       btn.addEventListener('click', () => openHwModal(btn.dataset.id));
@@ -1932,11 +1897,14 @@
       html += renderNoteChips(noteIndex.get(dateStr));
 
       for (const l of dayLessons) {
-        const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.postponed ? 'overdue' : 'pending');
+        const statusCls = l.done ? 'done' : (parseDate(l.date) < today() ? 'overdue' : 'pending');
         const color = CLASS_COLORS[l.class] || '#64748b';
+        // 班級、打勾、主題各自包一層 —— 手機上每格只有 54px 闊，這三段要能
+        // 分開收：班級獨立一行、打勾收起來（顏色已經表示了狀態）、主題讓它截字。
         html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
         html += `<span class="cal-lesson-class">${escHtml(l.class)}</span>`;
-        html += `${l.done ? '✅' : '⬜'} ${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}`;
+        html += `<span class="cal-lesson-mark">${l.done ? '✅' : '⬜'}</span>`;
+        html += `<span class="cal-lesson-topic">${escHtml(l.topic.substring(0, 12))}${l.topic.length > 12 ? '...' : ''}</span>`;
         html += `</div>`;
       }
 
@@ -2102,16 +2070,12 @@
   }
 
   // 一次勾完某一天。請假、或隔了幾天才想到要補登時，一節一節點很痛苦。
-  // 已標「延期」的課是老師明確說過「這節沒上成」的，跳過不勾 ——
-  // 勾了會變成既完成又延期，兩個狀態互相矛盾。
   function markDayDone(dateStr) {
     const targets = [];
-    let skipped = 0;
     for (const [cls, lessons] of Object.entries(state.lessons)) {
       if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
       for (const l of lessons) {
         if (l.date !== dateStr || l.done) continue;
-        if (l.postponed) { skipped++; continue; }
         targets.push(l.id);
       }
     }
@@ -2124,9 +2088,9 @@
     renderAll();
     repaintOpenDayModal();
 
-    // 復原記的是 id 不是物件。中途若按了「順延」，整班的課堂會被重新產生，
-    // 舊的物件已經不在 state 裡 —— 改它也改不到真的資料，得重新找回來。
-    toast(`✅ 已勾選 ${targets.length} 節${skipped ? `（略過 ${skipped} 節延期）` : ''}`, 'success', {
+    // 復原記的是 id 不是物件。存檔、換 plan 都會把課堂物件換掉，舊的物件已經
+    // 不在 state 裡 —— 改它也改不到真的資料，得重新找回來。
+    toast(`✅ 已勾選 ${targets.length} 節`, 'success', {
       label: '復原',
       onClick: () => {
         let n = 0;
@@ -2164,59 +2128,54 @@
     markLessonDirty(id);
   }
 
-  function postponeLesson(id) {
-    const l = findLesson(id);
-    if (!l || l.done) return;
-    l.postponed = !l.postponed;
-    markLessonDirty(id);
-    renderAll();
-    toast(l.postponed ? `⏸ ${classPeriod(l)}已延期` : `▶ ${classPeriod(l)}已取消延期`, l.postponed ? 'warning' : 'success');
+  // 同一班同一學期的下一節。課堂陣列本身就是照日期排的（見 generateLessonSlots），
+  // 所以下一節就是陣列裡的下一筆 —— 但要擋住跨學期那一步：上學期最後一節的
+  // 「下一筆」是下學期第一節，把它們併在一起沒有意義。
+  function nextLessonOf(l) {
+    const list = state.lessons?.[l.class] || [];
+    const i = list.findIndex(x => x.id === l.id);
+    if (i < 0) return null;
+    const next = list[i + 1];
+    return next && next.semester === l.semester ? next : null;
   }
 
-  function autoShift(id) {
+  // 「➜ 加到下一節」：這一節上唔切，把它的內容補進下一節一齊上。
+  // 原位照樣顯示自己的內容，老師才看得到自己欠了哪一節；之後的節全部不動。
+  // 做法就是在下一節寫一個 topic_override（跟直接在卡片上打字是同一條路），
+  // 所以逐節同步、逐節合併都照舊，不需要新的存檔欄位。
+  function carryToNext(id) {
     const l = findLesson(id);
     if (!l) return;
-    const cls = l.class;
-    const sem = l.semester;
+    const next = nextLessonOf(l);
+    if (!next) return;
 
-    // 這台裝置若還沒存過進度，state.progress 會是 null
-    if (!state.progress) state.progress = initEmptyProgress();
-    if (!state.progress.classes) state.progress.classes = {};
-    if (!state.progress.classes[cls]) state.progress.classes[cls] = {};
-    if (!state.progress.classes[cls][sem]) state.progress.classes[cls][sem] = {};
-    const slot = state.progress.classes[cls][sem];
-    const currentShift = slot.shift_count || 0;
-
-    // 順延次數是純量，兩台裝置各按一次沒辦法逐節合併 —— 比時間戳決定誰新。
-    if (currentShift > 0) {
-      // Undo: decrement shift count
-      slot.shift_count = currentShift - 1;
-      slot.shift_count_at = stampNow();
-      regenerateClassLessons(cls);
-      markDirty();
-      renderAll();
-      toast(`↩ ${cls} 已取消一節順延（剩餘 ${currentShift - 1} 節）`, 'success');
-    } else {
-      // Shift: increment shift count
-      slot.shift_count = currentShift + 1;
-      slot.shift_count_at = stampNow();
-      regenerateClassLessons(cls);
-      markDirty();
-      renderAll();
-      toast(`⏩ ${cls} 已順延一節`, 'info');
+    if (!l.topic) { toast('這一節未有內容，冇得加', 'info'); return; }
+    // 按第二次不該再加一次
+    if (next.topic === l.topic || next.topic.startsWith(l.topic + '；')) {
+      toast('這一節已經加過了', 'info');
+      return;
     }
-  }
 
-  // 只重算一個班的課堂，並把記憶體裡的勾選／備註／主題覆寫帶過去。
-  // 帶得過去是因為 id 認的是「日期＋當天第幾節」—— 換 plan 或按順延讓名次整體
-  // 位移時，同一個 id 仍然指向同一天，不會把老師勾的貼到別的日期。
-  function regenerateClassLessons(cls) {
-    if (!state.plan?.schedule?.[cls]) return;
-    const oldLessons = state.lessons[cls] || [];
-    state.lessons[cls] = [
-      ...buildClassLessons(cls, 'semester1', oldLessons),
-      ...buildClassLessons(cls, 'semester2', oldLessons)
-    ];
+    const before = next.topic;
+    next.topic = before ? `${l.topic}；${before}` : l.topic;
+    markLessonDirty(next.id);
+    renderAll();
+    repaintOpenDayModal();
+
+    // 復原記的是 id 不是字串：若中途換了 plan，整班的課堂物件會重新產生，
+    // 舊物件已經不在 state 裡（同 markDayDone 的復原）。
+    toast(`➜ 已加到 ${fmtDisplay(next.date)}`, 'success', {
+      label: '復原',
+      onClick: () => {
+        const t = findLesson(next.id);
+        if (!t) return;
+        t.topic = before;
+        markLessonDirty(next.id);
+        renderAll();
+        repaintOpenDayModal();
+        toast('已復原', 'info');
+      }
+    });
   }
 
   // 點月曆的日期格 → 當天的完整清單。格子只有六十幾 px 寬，塞不下的都會被
@@ -2268,9 +2227,9 @@
     } else {
       body += '<div class="day-modal-list">' + dayLessons.map(l => {
         const color = CLASS_COLORS[l.class] || '#64748b';
-        const late = !l.done && !l.postponed && parseDate(l.date) < today();
-        const status = l.done ? '已上完' : (l.postponed ? '已延期' : (late ? '未上 · 逾期' : '未上'));
-        const statusCls = l.done ? 'done' : (l.postponed ? 'shifted' : (late ? 'overdue' : 'pending'));
+        const late = !l.done && parseDate(l.date) < today();
+        const status = l.done ? '已上完' : (late ? '未上 · 逾期' : '未上');
+        const statusCls = l.done ? 'done' : (late ? 'overdue' : 'pending');
         return `<button type="button" class="day-modal-item" data-id="${escHtml(l.id)}">
             <span class="day-modal-dot" style="background:${color}"></span>
             <span class="day-modal-main">
@@ -2284,9 +2243,7 @@
 
     $('modal-body').innerHTML = body;
 
-    // 「全部完成」跟今日課堂那條一樣，只在還有未完成、未延期的課時出現。
-    // 已延期的不能算進來 —— markDayDone 會跳過它們，算進來會讓按鈕按了也消不掉。
-    const undone = dayLessons.filter(l => !l.done && !l.postponed).length;
+    const undone = dayLessons.filter(l => !l.done).length;
     $('modal-footer').innerHTML = (undone === 0 ? '' : `
         <span class="day-modal-count">${undone} 節未完成</span>
         <button class="btn btn-success" id="day-modal-done-all">✓ 全部完成</button>`)
@@ -2315,7 +2272,6 @@
     body.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
         <span class="badge ${l.done ? 'badge-ok' : 'badge-behind'}">${l.done ? '已完成' : '未完成'}</span>
-        ${l.postponed ? '<span class="badge" style="background:#fef3c7;color:#92400e">已延期</span>' : ''}
       </div>
       <div style="font-size:14px;color:var(--gray-600);margin-bottom:12px">
         <div>📅 ${fmtDisplay(l.date)} ${l.dayOfWeek} ${l.time}</div>
