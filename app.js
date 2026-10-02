@@ -54,12 +54,30 @@
     dayModalDate: null
   };
 
-  // Class colors for calendar
-  const CLASS_COLORS = {
-    '[class-A]': '#3b82f6', '[class-B]': '#8b5cf6',
-    '[class-C]': '#10b981', '[class-D]': '#14b8a6',
-    '[class-E]': '#f59e0b', '[class-F]': '#ef4444'
-  };
+  // 班級顏色。正式的一組由 plan.json 的 "class_colors" 提供（{班名: #hex}）——
+  // 班名是學校的事實，跟課節表一樣只放在老師自己的 Gist，程式碼裡不寫死。
+  //
+  // plan 沒帶（舊快取）或者有班沒被指定（課後班）時，用下面的通用調色盤補。
+  // 補法是「按班名排序，逐個取還沒被用掉的顏色」而不是拿班名去雜湊 ——
+  // 雜湊會撞色（兩個班同一個顏色，老師就分不出來了），而且撞不撞取決於
+  // 班名碰巧長怎樣。排序取色則一定不撞，而且同一份 plan 在三台裝置算出來
+  // 一樣，因為 plan.schedule 的班名集合三台都相同。
+  const CLASS_PALETTE = [
+    '#3b82f6', '#8b5cf6', '#10b981', '#14b8a6',
+    '#f59e0b', '#ef4444', '#0ea5e9', '#d946ef'
+  ];
+  function classColor(cls) {
+    const plan = state.plan || {};
+    const explicit = plan.class_colors || {};
+    if (explicit[cls]) return explicit[cls];
+    const pool = CLASS_PALETTE.filter(c => !Object.values(explicit).includes(c));
+    const i = Object.keys(plan.schedule || {}).sort().indexOf(cls);
+    if (i >= 0 && pool.length) return pool[i % pool.length];
+    // plan 裡根本沒有這個班（臨時湊出來的資料）→ 退回雜湊，至少每次一樣
+    let h = 0;
+    for (const ch of String(cls || '')) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+    return CLASS_PALETTE[h % CLASS_PALETTE.length];
+  }
 
   // ============ DOM REFS ============
   const $ = id => document.getElementById(id);
@@ -265,7 +283,7 @@
     };
 
     for (const [cls, sems] of Object.entries(all)) {
-      // 有些班是寫 {"same_as": "[class-C]"}，沿用被指向那一班的內容
+      // 有些班集是寫 {"same_as": "另一班"}（同程度合班上課），沿用被指向那一班的內容
       const own = sems && sems.same_as ? all[sems.same_as] : sems;
       if (!own || typeof own !== 'object') continue;
       // 行事曆上方已經有班級篩選了，這裡必須跟著同一個篩選，
@@ -300,8 +318,8 @@
   //
   // kind 決定顏色：交／派是功課，統測／考試是測考，其餘是雜項。
   // 顏色分三種：交／派作業藍、統測琥珀、考試紅，其餘灰。
-  // 「統測」用搜尋而不是比對開頭 —— 課節表上寫的是「統測 …」，
-  // 但老師另外記的考試時間寫成「物理統測 第3節」，兩種都要著色。
+  // 「統測」用搜尋而不是比對開頭 —— 課節表寫的是「統測 …」開頭，
+  // 但老師另外記的考試時間會寫成「<科目>統測 第N節」，兩種都要著色。
   function noteKind(text) {
     if (/^交/.test(text)) return 'hw';
     if (/^派/.test(text)) return 'hw';
@@ -346,9 +364,9 @@
   // 同一天同一個測驗六個班都要考時，畫六個「測驗」沒有意義，
   // 所以同型別＋同範圍的合成一個，後面掛班級數。
   //
-  // 考試與期中考例外，只按型別合併：它們是全校統一的日子，但每個班的 scope
-  // 寫法不一樣（[class-A]寫「機械運動+聲現象…」、[class-C]寫「功與機械能…」、有的班
-  // 根本空著），照 scope 分組會讓同一天冒出三個「考試」標記。scope 收進 tooltip。
+  // 考試與期中考例外，只按型別合併：它們是全校統一的日子，但每個班填的範圍
+  // 粗細不一（有的寫整章、有的只寫一節、有的根本空著），照範圍分組會讓同一天
+  // 冒出好幾個「考試」標記。範圍收進 tooltip。
   // max 預設 3 —— 月曆格子只有六十幾 px 寬，塞不下更多。
   // 當日清單（openDayModal）不受這個限制，那裡有整個視窗的寬度。
   function renderAssessChips(events, max = 3) {
@@ -397,13 +415,27 @@
     return result;
   }
 
+  // teaching_content 是按「程度」分組的，不是每個班一份（同程度的兩班共用進度）。
+  // 對應關係由 plan 的 schedule[班級].content_level 明寫（注意不是 .level ——
+  // 那個是側欄「初中／高中」分組用的，另一回事）；沒有就退回猜 —— 先找完全同名的鍵，
+  // 再把班名逐字縮短（把「三年乙班」試成「三年乙」、「三年」）找第一個真的存在的鍵。這樣程式不必知道
+  // 任何一個真實班名或程度名。
+  function contentLevelOf(className) {
+    const explicit = state.plan?.schedule?.[className]?.content_level;
+    if (explicit) return explicit;
+    const keys = Object.keys(state.plan?.teaching_content || {});
+    if (keys.includes(className)) return className;
+    for (let n = String(className).length - 1; n >= 2; n--) {
+      const p = String(className).slice(0, n);
+      if (keys.includes(p)) return p;
+    }
+    return className;
+  }
+
   function flattenContentUncached(className, semester) {
     const tc = state.plan?.teaching_content;
     if (!tc) return [];
-    const level = className.startsWith('高一') ? '[class-E]'
-      : className.startsWith('高二') ? '[class-F]'
-        : className.startsWith('初二') ? '初二'
-          : '初三';
+    const level = contentLevelOf(className);
     const semData = tc[level]?.[semester];
     if (!semData?.chapters) {
       return [{ label: '(待補)', chapter: '', section: '' }];
@@ -470,29 +502,32 @@
   }
 
   // ============ DATA: LESSON SLOT GENERATION ============
-  // 學期起訖日優先用 plan.json 的 "semesters" 欄位，沒有才用下面的預設值。
-  // 換學年時只要在 plan 的 Gist 補上這段，不必改程式：
-  //   "semesters": {
-  //     "semester1": { "start": "2026-09-01", "end": "2027-01-23" },
-  //     "semester2": { "start": "2027-02-03", "end": "2027-07-07" }
-  //   }
-  const DEFAULT_SEMESTERS = {
+  // 學期起訖日一律由 plan.json 的 "semesters" 提供：
+  //   "semesters": { "semester1": {"start":"…","end":"…"}, "semester2": {…} }
+  // 下面的常數只是「plan 完全沒有這個欄位」時的最後防線，免得整個 app 排不出任何課。
+  // 一旦真的用上它就會在 console 出聲 —— 那代表 plan 少了東西，要盡快去補，
+  // 而不是讓它靜靜地按一組可能已經過期的日期排課。
+  const FALLBACK_SEMESTERS = {
     semester1: { start: '2026-09-01', end: '2027-01-23' },
     semester2: { start: '2027-02-03', end: '2027-07-07' }
   };
+  let warnedSemesterFallback = false;
 
   function getSemesterRanges() {
     const cfg = state.plan?.semesters || {};
     const valid = d => d instanceof Date && !isNaN(d.getTime());
     const pick = key => {
-      const fb = DEFAULT_SEMESTERS[key];
+      const fb = FALLBACK_SEMESTERS[key];
       const s = cfg[key] || {};
       const start = parseDate(s.start || fb.start);
       const end = parseDate(s.end || fb.end);
       // 日期打錯會變成 Invalid Date，產生不出任何課 —— 這種情況退回預設值
-      return valid(start) && valid(end) && start <= end
-        ? { start, end }
-        : { start: parseDate(fb.start), end: parseDate(fb.end) };
+      if (valid(start) && valid(end) && start <= end) return { start, end };
+      if (!warnedSemesterFallback) {
+        warnedSemesterFallback = true;
+        console.warn(`plan.json 的 semesters.${key} 缺失或格式不對，暫用內建備用日期排課 —— 請補回 plan。`);
+      }
+      return { start: parseDate(fb.start), end: parseDate(fb.end) };
     };
     return { s1: pick('semester1'), s2: pick('semester2') };
   }
@@ -509,8 +544,8 @@
 
   // 課節表只寫「這天有幾節」，不寫第幾節。節次由該班的 weekly_slots 取該星期的
   // 前 N 個（依節次排序 —— weekly_slots 的陣列順序不保證照節次排）。
-  // 該星期沒排課就退回該班第一個時段：26-27 只有[class-C]／乙 2027-04-24（星期六）
-  // 這一格，課節表上沒有時間可抄。
+  // 該星期沒排課就退回該班第一個時段 —— 課節表若有排到該班固定課表以外的
+  // 星期（例如星期六補課），那個星期本來就沒有時間可抄。
   function slotsForDay(slotsByDay, dow, n) {
     const have = (slotsByDay[dow] || []).slice().sort((a, b) => a.period - b.period);
     const out = [];
@@ -644,9 +679,8 @@
   function hasDate(rec) { return /^\d{4}-\d{2}-\d{2}$/.test(rec?.date || ''); }
   function lessonKey(l) { return `${l.date}#${l.seq}`; }
 
-  // 課節表有一天只寫了節數、沒寫節次：[class-C]／乙 2027-04-24（星期六），
-  // 兩班的 weekly_slots 都沒有星期六。那一節的 period 是 null，寧可少顯示一段，
-  // 也不要編一個不存在的節次或時間出來。
+  // 有時課節表只寫了節數、沒寫節次（那天不在該班的固定課表上）。
+  // 那一節的 period 是 null，寧可少顯示一段，也不要編一個不存在的節次或時間出來。
   function periodLabel(l) {
     return Number.isInteger(l?.period) ? `第${l.period}節` : '';
   }
@@ -800,7 +834,7 @@
         }).filter(Boolean);
 
         // 配不到目前任何一節的紀錄原樣帶著走。老師真的上過、但 plan 上沒有這一節
-        // （例：[class-E] 9/11 開學彌撒）不該因為存一次檔就消失 —— 這裡是每次存檔
+        // （例如老師真的上了、但課節表上沒有的一天）不該因為存一次檔就消失 —— 這裡是每次存檔
         // 都會跑的路徑，少了這段，切換 plan 後的第一次存檔就把它清掉了。
         // 原樣 = 不補 updated_at，否則它會在往後每次合併都無條件贏過別台裝置。
         const orphans = prevRecords.filter(r => !claimed.has(r));
@@ -827,7 +861,7 @@
     return progress;
   }
 
-  // 逐節合併。課堂紀錄彼此獨立 —— A 裝置勾了[class-C]第 12 節、B 裝置勾了[class-E]第 8 節
+  // 逐節合併。課堂紀錄彼此獨立 —— A 裝置勾了甲班某一節、B 裝置勾了乙班另一節
   // 根本不衝突，沒有理由叫老師二選一。
   //
   // 時間戳取 rec.updated_at || 文件的 _meta.last_modified。後面那個 fallback 是必要的：
@@ -1792,7 +1826,7 @@
     if (legend) {
       const classes = Object.keys(state.lessons);
       let legendHtml = classes.map(cls => {
-        const color = CLASS_COLORS[cls] || '#64748b';
+        const color = classColor(cls);
         const isActive = state.selectedClasses.size === 0 || state.selectedClasses.has(cls);
         const opacity = isActive ? '1' : '0.3';
         return `<span class="cal-legend-item" style="opacity:${opacity};cursor:pointer" data-class="${escHtml(cls)}"><span class="cal-legend-dot" style="background:${color}"></span>${escHtml(cls)}</span>`;
@@ -1898,7 +1932,7 @@
 
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() ? 'overdue' : 'pending');
-        const color = CLASS_COLORS[l.class] || '#64748b';
+        const color = classColor(l.class);
         // 班級、打勾、主題各自包一層 —— 手機上每格只有 54px 闊，這三段要能
         // 分開收：班級獨立一行、打勾收起來（顏色已經表示了狀態）、主題讓它截字。
         html += `<div class="cal-lesson cal-lesson-clickable ${statusCls}" style="border-left-color:${color}" data-id="${l.id}">`;
@@ -2226,7 +2260,7 @@
       body += `<div class="day-modal-empty">這天沒有課堂</div>`;
     } else {
       body += '<div class="day-modal-list">' + dayLessons.map(l => {
-        const color = CLASS_COLORS[l.class] || '#64748b';
+        const color = classColor(l.class);
         const late = !l.done && parseDate(l.date) < today();
         const status = l.done ? '已上完' : (late ? '未上 · 逾期' : '未上');
         const statusCls = l.done ? 'done' : (late ? 'overdue' : 'pending');
