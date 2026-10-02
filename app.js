@@ -299,11 +299,14 @@
   // 老師根本看不出是哪一班。
   //
   // kind 決定顏色：交／派是功課，統測／考試是測考，其餘是雜項。
+  // 顏色分三種：交／派作業藍、統測琥珀、考試紅，其餘灰。
+  // 「統測」用搜尋而不是比對開頭 —— 課節表上寫的是「統測 …」，
+  // 但老師另外記的考試時間寫成「物理統測 第3節」，兩種都要著色。
   function noteKind(text) {
     if (/^交/.test(text)) return 'hw';
     if (/^派/.test(text)) return 'hw';
-    if (/^統測/.test(text)) return 'test';
-    if (/^上學期考試|^下學期考試/.test(text)) return 'exam';
+    if (/統測/.test(text)) return 'test';
+    if (/考試/.test(text)) return 'exam';
     return 'misc';
   }
 
