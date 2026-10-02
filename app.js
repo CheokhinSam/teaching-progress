@@ -224,8 +224,15 @@
     return out;
   }
 
+  // 老師 2026-10-02 指示：assessments 那份資料他要先自己整理過，整理好之前
+  // 不要顯示。日曆上的「測驗／期中考／考試／交／堂課」標籤全部來自它，
+  // 開關就這一個。整理好之後改成 true 就即刻回來。
+  // 關掉期間，日曆上的作業／統測提醒改由課節表抄下來的 notes 負責（見下）。
+  const SHOW_ASSESSMENTS = false;
+
   function buildAssessmentIndex() {
     const index = new Map();
+    if (!SHOW_ASSESSMENTS) return index;
     const all = state.plan?.assessments;
     if (!all || typeof all !== 'object') return index;
 
@@ -260,6 +267,55 @@
       }
     }
     return index;
+  }
+
+  // ============ DATA: 課節表的非上課日備註 ============
+  // 課節表上有些格沒有節數（那天不用上課），但寫了「交作業二」「統測」這些事。
+  // 它們不是課堂，不進課堂清單，但那天要記得，所以畫在日曆上。
+  //
+  // 顯示時一定要帶班級 —— 六個班都各有「交作業二」，只寫「交作業二」的話
+  // 老師根本看不出是哪一班。
+  //
+  // kind 決定顏色：交／派是功課，統測／考試是測考，其餘是雜項。
+  function noteKind(text) {
+    if (/^交/.test(text)) return 'hw';
+    if (/^派/.test(text)) return 'hw';
+    if (/^統測/.test(text)) return 'test';
+    if (/^上學期考試|^下學期考試/.test(text)) return 'exam';
+    return 'misc';
+  }
+
+  function buildNoteIndex() {
+    const index = new Map();
+    const sched = state.plan?.schedule;
+    if (!sched || typeof sched !== 'object') return index;
+    for (const [cls, info] of Object.entries(sched)) {
+      // 跟行事曆上方的班級篩選同一套，沒選的班不畫。
+      if (state.selectedClasses.size > 0 && !state.selectedClasses.has(cls)) continue;
+      for (const n of (info.notes || [])) {
+        const date = n?.date;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) continue;
+        if (!index.has(date)) index.set(date, []);
+        index.get(date).push({ cls, text: n.text || '', kind: noteKind(n.text || '') });
+      }
+    }
+    return index;
+  }
+
+  // max 預設 2 —— 月曆格子只有六十幾 px 寬，一格裡還要放課堂藥丸，
+  // 備註塞太多會把課堂擠出去。當日清單（openDayModal）不受這個限制。
+  function renderNoteChips(notes, max = 2) {
+    if (!notes || notes.length === 0) return '';
+    let html = '<div class="cal-note">';
+    for (const n of notes.slice(0, max)) {
+      html += `<span class="cal-note-chip cal-note-${n.kind}" title="${escHtml(n.cls + '：' + n.text)}">`
+        + escHtml(`${n.cls}：${n.text}`) + '</span>';
+    }
+    if (notes.length > max) {
+      html += `<span class="cal-note-chip cal-note-more" title="${escHtml(notes.slice(max).map(n => n.cls + '：' + n.text).join('\n'))}">`
+        + `+${notes.length - max}</span>`;
+    }
+    return html + '</div>';
   }
 
   // 同一天同一個測驗六個班都要考時，畫六個「測驗」沒有意義，
@@ -1739,6 +1795,7 @@
     // Build holiday set
     const holidaySet = buildHolidaySet();
     const assessIndex = buildAssessmentIndex();
+    const noteIndex = buildNoteIndex();
 
     // Legend
     if (legend) {
@@ -1841,6 +1898,7 @@
       // 測驗／考試／功課截止放在課堂之前 —— 這些是「那天一定要記得」的事，
       // 課堂清單一長就會把它們擠出格子。
       html += renderAssessChips(assessIndex.get(dateStr));
+      html += renderNoteChips(noteIndex.get(dateStr));
 
       for (const l of dayLessons) {
         const statusCls = l.done ? 'done' : (parseDate(l.date) < today() && !l.postponed ? 'overdue' : 'pending');
@@ -2163,12 +2221,14 @@
 
     const holiday = getHolidayName(dateStr);
     const assess = buildAssessmentIndex().get(dateStr) || [];
+    const notes = buildNoteIndex().get(dateStr) || [];
 
     let body = '';
     if (holiday) body += `<div class="day-modal-holiday">🎌 ${escHtml(holiday)}</div>`;
     // 這裡不受月曆那個「最多 3 個」的限制 —— 視窗夠寬，而且漏看一個考試
     // 比多佔一行嚴重得多。
     if (assess.length) body += renderAssessChips(assess, 99);
+    if (notes.length) body += renderNoteChips(notes, 99);
 
     if (dayLessons.length === 0) {
       body += `<div class="day-modal-empty">這天沒有課堂</div>`;

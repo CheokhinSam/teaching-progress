@@ -848,6 +848,36 @@ textarea { resize: vertical; min-height: 80px; }
 .cal-assess-cw   { background: var(--gray-100); color: var(--gray-600); }
 .cal-assess-more { background: var(--gray-200); color: var(--gray-600); }
 
+/* 課節表上「那天不用上課、但要記得」的事（交作業二、統測…）。
+   跟測驗標籤同一套色，但一定要帶班級名 —— 六個班都有「交作業二」，
+   只寫工作名看不出是哪一班。所以允許換行，不裁掉班級。 */
+.cal-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.cal-note-chip {
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 4px;
+  cursor: default;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.cal-note-hw   { background: #dbeafe; color: #1e40af; }
+.cal-note-test { background: #fef3c7; color: #92400e; }
+.cal-note-exam { background: #fee2e2; color: #991b1b; }
+.cal-note-misc { background: var(--gray-100); color: var(--gray-600); }
+.cal-note-more { background: var(--gray-200); color: var(--gray-600); }
+
 .cal-month-grid {
   display: grid;
   /* 週一到週六 6 欄。星期六沒有固定課，但校曆、考試、功課截止會落在週六 ——
@@ -1071,6 +1101,7 @@ textarea { resize: vertical; min-height: 80px; }
   .cal-lesson-class { font-size: 11px; display: inline; margin-right: 4px; }
   .cal-assess-chip { font-size: 11px; }
   .cal-assess-n { font-size: 10px; }
+  .cal-note-chip { font-size: 11px; }
   .cal-holiday-tag { font-size: 11px; }
 
   .modal { max-width: 100%; margin: 10px; }
