@@ -1166,6 +1166,18 @@ textarea { resize: vertical; min-height: 80px; }
      剛好塞得下。原本 12px 內距是 76px > 71px，最後一個「⚙ 設定」就被切掉。 */
   .nav-tab { padding: 8px 6px; }
 
+  /* 手機收起週六那一欄。學校週六沒有常規課，留着一欄等於白白收窄其餘
+     五天 —— 390px 手機上每格由 69px 掉到 57px，主題由 5 個字變 4 個字。
+     收掉的代價（一年 12 日）老師已知：7 日假期、4 日統測標記（前後平日
+     照樣有標，感覺得到那一週統測）、同 2027-04-24 [class-C]／[class-D]各 1 節
+     —— 那天在「今日課堂」與「本週課表」照樣出現，只是月曆上沒有。
+
+     只在 ≤480px 收：480px 以上 6 欄每格仍有 72px，塞得落，不必犧牲資訊。
+     表頭與格子都是 grid 的直接子元素，而且固定每 6 個一列（見 renderCalendar
+     的 cellCount % 6），所以 nth-child(6n) 剛好就是每一列的週六。 */
+  .cal-month-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .cal-month-grid > *:nth-child(6n) { display: none; }
+
   .lesson-actions { flex-wrap: wrap; }
   .lesson-actions .btn { flex: 1; justify-content: center; }
 }
