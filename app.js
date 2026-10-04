@@ -540,7 +540,7 @@
   // plan 的 schedule[班級].days 是課節表「日期／節數／內容」的逐字抄錄。
   // 有它就完全照它排課：日期、節數、內容都不再從 weekly_slots、假期表、考試表
   // 推導 —— 推導只要有一處對不上，後面每一節都會位移。沒有 days 的班級／學期
-  // （舊 plan、VEX班、創客班）才走原本的推導路徑。
+  // （舊 plan、以及沒有逐日課節表可抄的班）才走原本的推導路徑。
   function explicitDays(className, semester) {
     const d = state.plan?.schedule?.[className]?.days?.[semester];
     return Array.isArray(d) && d.length ? d : null;
