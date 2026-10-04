@@ -1102,7 +1102,7 @@ textarea { resize: vertical; min-height: 80px; }
 
   .stats-line { gap: 5px; padding: 5px 12px; }
 
-  /* 「◀ 前一天 / 2026年10月2日 週五 / 後一天 ▶ / 今天」四件東西擠在 358px
+  /* 「◀ 前一天 / 日期 / 後一天 ▶ / 今天」四件東西擠在 358px
      裡，按鈕會斷成「◀ 前一／天」「今／天」。窄螢幕改成兩行：日期自己一行
      居中，三顆按鈕下面平分。用 flex-wrap + order 做，不用改 HTML。 */
   .week-nav { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }

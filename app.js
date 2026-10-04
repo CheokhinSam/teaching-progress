@@ -248,8 +248,9 @@
     cw:      { text: '堂課', cls: 'cal-assess-cw' }
   };
 
-  // 只挑字串裡的 YYYY-MM-DD。homework.assign 長成 "W3 2026-09-14"，
-  // 整串丟給 parseDate 會拿到 Invalid Date，所以一律先把日期挑出來。
+  // 只挑字串裡的 YYYY-MM-DD。homework.assign 是「週次 + 日期」串起來的
+  // （前面還帶著 "W3" 這種字），整串丟給 parseDate 會拿到 Invalid Date，
+  // 所以一律先用正則把日期挑出來，再逐個解析。
   function datesIn(raw) {
     return (String(raw || '').match(/\d{4}-\d{2}-\d{2}/g) || [])
       .map(parseDate).filter(d => !isNaN(d));
@@ -264,10 +265,10 @@
     return out;
   }
 
-  // 老師 2026-10-02 指示：assessments 那份資料他要先自己整理過，整理好之前
-  // 不要顯示。日曆上的「測驗／期中考／考試／交／堂課」標籤全部來自它，
-  // 開關就這一個。整理好之後改成 true 就即刻回來。
-  // 關掉期間，日曆上的作業／統測提醒改由課節表抄下來的 notes 負責（見下）。
+  // assessments 那份資料還在整理，整理好之前不顯示。日曆上的
+  // 「測驗／期中考／考試／交／堂課」標籤全部來自它，開關就這一個 ——
+  // 改成 true 就即刻回來。關掉期間，日曆上的作業／統測提醒改由課節表
+  // 抄下來的 notes 負責（見下）。
   const SHOW_ASSESSMENTS = false;
 
   function buildAssessmentIndex() {
@@ -504,32 +505,35 @@
   // ============ DATA: LESSON SLOT GENERATION ============
   // 學期起訖日一律由 plan.json 的 "semesters" 提供：
   //   "semesters": { "semester1": {"start":"…","end":"…"}, "semester2": {…} }
-  // 下面的常數只是「plan 完全沒有這個欄位」時的最後防線，免得整個 app 排不出任何課。
-  // 一旦真的用上它就會在 console 出聲 —— 那代表 plan 少了東西，要盡快去補，
-  // 而不是讓它靜靜地按一組可能已經過期的日期排課。
-  const FALLBACK_SEMESTERS = {
-    semester1: { start: '2026-09-01', end: '2027-01-23' },
-    semester2: { start: '2027-02-03', end: '2027-07-07' }
-  };
-  let warnedSemesterFallback = false;
-
+  // 這裡刻意**不**內建一組備用日期。備用日期只要跟真實學年差一點，排出來的
+  // 每一節都會靜靜地錯，而畫面上看起來完全正常 —— 這種錯比排不出課難發現得多。
+  // 所以缺少或格式不對時一律回 null，由呼叫端決定怎麼講給老師聽（見下）。
+  // （也因為如此，這份原始碼裡不應該出現任何日曆日期：學期、假期、考試、上課日
+  //   全部是老師自己的資料，只放在 plan。）
   function getSemesterRanges() {
     const cfg = state.plan?.semesters || {};
     const valid = d => d instanceof Date && !isNaN(d.getTime());
     const pick = key => {
-      const fb = FALLBACK_SEMESTERS[key];
       const s = cfg[key] || {};
-      const start = parseDate(s.start || fb.start);
-      const end = parseDate(s.end || fb.end);
-      // 日期打錯會變成 Invalid Date，產生不出任何課 —— 這種情況退回預設值
-      if (valid(start) && valid(end) && start <= end) return { start, end };
-      if (!warnedSemesterFallback) {
-        warnedSemesterFallback = true;
-        console.warn(`plan.json 的 semesters.${key} 缺失或格式不對，暫用內建備用日期排課 —— 請補回 plan。`);
-      }
-      return { start: parseDate(fb.start), end: parseDate(fb.end) };
+      const start = parseDate(s.start);
+      const end = parseDate(s.end);
+      // 日期打錯會變成 Invalid Date，跟沒寫一樣當作拿不到
+      return valid(start) && valid(end) && start <= end ? { start, end } : null;
     };
     return { s1: pick('semester1'), s2: pick('semester2') };
+  }
+
+  // plan 少了可用的學期起訖日，那一班那一學期就排不出任何課。這一定要出聲：
+  // 否則畫面上只是一個空空的課表，老師只會以為是 app 壞了，不會想到是 plan 少了東西。
+  // generateLessonSlots 每次重新產生都會走到這裡，所以同一個組合只吵一次。
+  const warnedSemesterMissing = new Set();
+  function warnMissingSemester(className, semester) {
+    const key = `${className}|${semester}`;
+    if (warnedSemesterMissing.has(key)) return;
+    warnedSemesterMissing.add(key);
+    const which = semester === 'semester1' ? '上學期' : '下學期';
+    console.error(`plan 的 semesters.${semester} 缺失或格式不對：${className} ${which}排不出課。`);
+    toast(`${className} ${which}排唔到課：plan 的學期日期缺失或格式不對`, 'error');
   }
 
   // ============ DATA: 逐日課節表 ============
@@ -590,10 +594,13 @@
         for (let k = 0; k < n; k++) plan.push({ date: d.date, dow, slot: daySlots[k], nth: k + 1 });
       }
     } else {
-      const holidaySet = buildHolidaySet();
-      const examRanges = buildExamRanges();
       const ranges = getSemesterRanges();
       const range = semester === 'semester1' ? ranges.s1 : ranges.s2;
+      // 拿不到學期起訖日 → 這一班這一學期不排課。不猜、也不用內建日期頂上：
+      // 猜出來的日期會讓整份進度錯位，比空著更難察覺。出聲見 warnMissingSemester。
+      if (!range) { warnMissingSemester(className, semester); return []; }
+      const holidaySet = buildHolidaySet();
+      const examRanges = buildExamRanges();
       for (let d = new Date(range.start); d <= range.end; d = addDays(d, 1)) {
         const dow = dayOfWeek(d);
         if (!slotDayNums.includes(dow)) continue;
