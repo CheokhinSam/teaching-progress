@@ -263,6 +263,42 @@ body {
   color: var(--gray-500);
 }
 
+/* 兩顆掣靠右排。左邊那個 span 在沒有未完成課堂時是空的，
+   留著是為了把掣推到右邊（justify-content: space-between）。 */
+.day-actions-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ========= WEEK VIEW ========= */
+.week-day { margin-bottom: 24px; }
+
+/* 每個日期都有自己的「＋ 加一節」。放在標題列而不是全部集中在一處 ——
+   老師看的是「那一天」，按下去要加的就是那一天。 */
+.week-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 8px;
+  padding-left: 4px;
+}
+
+.week-day-head.today { color: var(--primary); }
+
+/* 這天沒有課。刻意用一行淡字而不是整個區塊收起來 —— 空的日期正是
+   「代課加一節」最常發生的地方，收起來就找不到那顆掣了。 */
+.week-day-empty {
+  font-size: 13px;
+  color: var(--gray-400);
+  padding: 4px 0 4px 8px;
+}
+
 .lesson-header {
   display: flex;
   align-items: flex-start;
@@ -489,6 +525,14 @@ body {
   text-decoration: none;
 }
 
+/* 「加一節」視窗那行自動帶入的上課時間。要看得見但不搶眼 ——
+   帶錯時間比不帶更難察覺，所以不藏起來，也不做成警示。 */
+.form-hint {
+  font-size: 12px;
+  color: var(--gray-400);
+  min-height: 16px;
+}
+
 textarea { resize: vertical; min-height: 80px; }
 
 /* ========= MODALS ========= */
@@ -554,9 +598,14 @@ textarea { resize: vertical; min-height: 80px; }
 .modal-footer {
   padding: 0 24px 20px;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* 「刪除這一節」推到最左，跟「儲存」隔開一整段。破壞性的掣就在儲存旁邊，
+   早晚會有按錯的一次。（窄螢幕換行時它自己佔一行，反而更清楚。） */
+#modal-delete { margin-right: auto; }
 
 /* ========= DAY MODAL（行事曆點日期）========= */
 .day-modal-holiday {
@@ -1032,6 +1081,7 @@ textarea { resize: vertical; min-height: 80px; }
 .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
 .empty-state h3 { font-size: 18px; color: var(--gray-600); margin-bottom: 8px; }
 .empty-state p { font-size: 14px; }
+.empty-state .btn { margin-top: 20px; }
 
 /* ========= VISIBILITY ========= */
 .hidden { display: none !important; }

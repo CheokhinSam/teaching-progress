@@ -574,7 +574,60 @@
     if (!info) return [];
     const slots = info.weekly_slots || [];
     const days = explicitDays(className, semester);
-    if (!days && slots.length === 0) return [];
+
+    // 課堂的身分是「日期＋當天第幾節」，不是名次。名次會因為 plan 而整體
+    // 位移，用它當鍵會讓老師勾的、寫的備註貼到別的日期上。
+    // 宣告得這麼前面，是因為下面每一條提早回傳的路徑都要用它組 id。
+    const semTag = semester === 'semester1' ? 's1' : 's2';
+
+    // 老師手動加的節（代課、調課）和刪掉的節，跟勾選、備註一樣存在進度文件裡。
+    // 它們是「產生課堂」的輸入，不是事後改陣列 —— 每次存檔成功都會整個重建
+    // state.lessons，直接塞進去的東西下一次存檔就消失了。
+    //
+    // 這裡刻意全部寫成行內式，不呼叫新的頂層函式：/tmp 的 harness 是從這個檔案
+    // 抽出「固定幾個函式名」丟進 vm 執行的，多叫一個沒被抽到的就會 ReferenceError。
+    const ov = state.progress?.classes?.[className]?.[semester];
+    const ovExtras = Array.isArray(ov?.extras) ? ov.extras : [];
+    const ovRemoved = (ov && typeof ov.removed === 'object' && ov.removed) || {};
+    const isGone = (date, seq) => {
+      const e = ovRemoved[`${date}#${seq}`];
+      return e === true || !!(e && e.removed === true);
+    };
+
+    // 手動加的節自己帶內容，不從 content[] 拿 —— 所以一律最後才插進 out，
+    // 免得搶走自動排出來那幾節的內容（老師要的是「就多了這節」，不是往後推）。
+    // seq 由 100 起跳：自動排出來的一天最多幾節，永遠是個位數，不會撞號；
+    // 撞號會讓兩節課的勾選、備註在跨裝置合併時互相蓋掉。
+    const buildExtras = base => ovExtras
+      .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.date || '')
+        && Number.isInteger(x.seq) && x.seq >= 100
+        && !isGone(x.date, x.seq))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.seq - b.seq))
+      .map((x, i) => {
+        const dow = dayOfWeek(parseDate(x.date));
+        return {
+          id: `${className}_${semTag}_${x.date}_${x.seq}`,   // 跟自動排的同一種形狀
+          class: className,
+          semester,
+          lessonNum: base + i + 1,
+          seq: x.seq,
+          date: x.date,
+          dayOfWeek: DAY_NAMES[dow],
+          time: x.time || '',
+          period: Number.isInteger(x.period) ? x.period : null,
+          // 老師自己打的字就是這一節的原生內容：之後他改主題，走的是跟其他節
+          // 一樣的 topic_override 那條路，不必多一個儲存位置。
+          topic: x.topic || '',
+          baseTopic: x.topic || '',
+          chapter: '',
+          done: false, note: '', hw: null,
+          isExtra: true
+        };
+      });
+
+    // 課表上沒有固定時段、也沒有逐日課節表的班，本來就整個不排 —— 但老師手動
+    // 加的節還是要生出來，否則它只會靜靜躺在文件裡，看不到也刪不掉。
+    if (!days && slots.length === 0) return buildExtras(0);
 
     const slotsByDay = groupSlotsByDay(slots);
     const slotDayNums = slots.map(s => DAYS[s.day]).sort((a, b) => a - b);
@@ -598,7 +651,7 @@
       const range = semester === 'semester1' ? ranges.s1 : ranges.s2;
       // 拿不到學期起訖日 → 這一班這一學期不排課。不猜、也不用內建日期頂上：
       // 猜出來的日期會讓整份進度錯位，比空著更難察覺。出聲見 warnMissingSemester。
-      if (!range) { warnMissingSemester(className, semester); return []; }
+      if (!range) { warnMissingSemester(className, semester); return buildExtras(0); }
       const holidaySet = buildHolidaySet();
       const examRanges = buildExamRanges();
       for (let d = new Date(range.start); d <= range.end; d = addDays(d, 1)) {
@@ -612,9 +665,6 @@
       }
     }
 
-    // 課堂的身分是「日期＋當天第幾節」，不是名次。名次會因為 plan 而整體
-    // 位移，用它當鍵會讓老師勾的、寫的備註貼到別的日期上。
-    const semTag = semester === 'semester1' ? 's1' : 's2';
     const seen = new Set();
     const out = [];
 
@@ -649,7 +699,20 @@
         hw: old?.hw || null
       });
     }
-    return out;
+
+    // 手動加的節按日期插進去，不是接在尾巴。nextLessonOf（list[i+1]）和
+    // 「目前進度」（find(l => !l.done)）都是照陣列次序找的，接在尾會讓
+    // 「➜ 加到下一節」指到錯的一節、目前進度也整個跳掉。
+    for (const x of buildExtras(out.length)) {
+      let i = out.length;
+      while (i > 0 && (out[i - 1].date > x.date
+        || (out[i - 1].date === x.date && out[i - 1].seq > x.seq))) i--;
+      out.splice(i, 0, x);
+    }
+
+    // 墓碑最後才濾。內容是照位置派下去的，一定要先派完再濾 —— 先濾的話，
+    // 被刪那一節之後的每一節都會往前補一條內容，那就不是「只是刪了這節」了。
+    return out.filter(l => !isGone(l.date, l.seq));
   }
 
   function generateLessonSlots() {
@@ -658,7 +721,13 @@
 
     for (const className of Object.keys(state.plan.schedule)) {
       const slots = state.plan.schedule[className]?.weekly_slots || [];
-      if (slots.length === 0
+      // 有手動加的節也算數：這種班就算課表上沒有固定時段，老師加的那幾節
+      // 也要看得到、刪得掉，不然資料只會靜靜躺在文件裡。
+      const hasExtras = ['semester1', 'semester2'].some(sem => {
+        const ex = state.progress?.classes?.[className]?.[sem]?.extras;
+        return Array.isArray(ex) && ex.length > 0;
+      });
+      if (slots.length === 0 && !hasExtras
         && !explicitDays(className, 'semester1')
         && !explicitDays(className, 'semester2')) continue;
       allLessons[className] = [
@@ -797,7 +866,9 @@
     progress._meta.version = '1.0';
     // schema 2 = 逐節紀錄多了 seq（同一天的第幾節），合併的鍵從 lesson 名次改成
     // 「日期＋seq」。舊版 app 仍用名次當鍵，兩版同時寫會撞號，所以存檔時要提醒。
-    progress._meta.schema = 2;
+    // schema 3 = 每個班每個學期多了 extras（手動加的節）與 removed（刪除的墓碑）。
+    // 舊版 app 不認得這兩個欄位，存一次檔就會把它們洗掉，所以存檔前要提醒。
+    progress._meta.schema = 3;
     progress._meta.last_modified = stampNow();
     const now = progress._meta.last_modified;
 
@@ -854,6 +925,18 @@
           lessons: [...emitted, ...orphans].sort(compareRecords)
         };
         if (prevSem?.shift_count_at) classData[semKey].shift_count_at = prevSem.shift_count_at;
+
+        // 手動加的節與刪除的墓碑原樣帶過去。它們的身分跟逐節紀錄一樣是
+        // 「日期＋當天第幾節」，但紀錄那套只管勾選／備註／主題，加與刪本身
+        // 要在這裡才存得住（少了這段，下一次存檔就把它們洗掉了）。
+        // extras 只增不減 —— 刪一個手動加的節是寫墓碑，不是把它從這裡拿掉 ——
+        // 所以跨裝置合併時是單純的聯集。removed 也是原樣帶，不補時間戳。
+        if (Array.isArray(prevSem?.extras) && prevSem.extras.length) {
+          classData[semKey].extras = prevSem.extras.slice();
+        }
+        if (prevSem?.removed && Object.keys(prevSem.removed).length) {
+          classData[semKey].removed = { ...prevSem.removed };
+        }
       }
       progress.classes[className] = classData;
     }
@@ -877,6 +960,80 @@
   // localPrevStamp = 本機這份「存檔前」的 _meta.last_modified。沒有逐筆時間戳的紀錄
   // （舊版 app 寫的）就用它當代理值。不能用剛蓋上的新時間戳 —— 那會讓本機每一筆沒碰過
   // 的舊紀錄都贏過別台裝置真正較新的紀錄，離線久一點就會蓋掉別人的進度。
+  // 手動加的節（extras）與刪除的墓碑（removed）的合併。這兩份都是「只增不減」的
+  // 清單，所以是聯集，不需要像逐節紀錄那樣逐欄比對 —— 加過的節在別台裝置上不會
+  // 變成沒加過。
+  //
+  // extras 的鍵是「日期＋當天第幾節」。兩台裝置離線時各自新增，有機會挑到同一個
+  // seq（都從 100 起跳）。同一筆（xid 相同）比 at 取新；不同筆撞號就把比較舊的
+  // 那筆改號，兩筆都留 —— 寧可號碼跳號，也不要吃掉老師加的節。
+  //
+  // removed 逐鍵比 at。刻意保留 {removed:false}（復原）這種紀錄：把它清掉的話，
+  // 還留著 {removed:true} 的那台裝置下一次存檔就會把刪除復活。
+  function mergeOverlay(localSem, remoteSem) {
+    const lx = Array.isArray(localSem?.extras) ? localSem.extras : [];
+    const rx = Array.isArray(remoteSem?.extras) ? remoteSem.extras : [];
+    const keyOf = x => `${x.date}#${x.seq}`;
+    const at = x => x?.at || '';
+    const out = [];
+    const byKey = new Map();
+    let nextSeq = 100;
+    for (const x of [...rx, ...lx]) {
+      if (x && Number.isInteger(x.seq) && x.seq >= nextSeq) nextSeq = x.seq + 1;
+    }
+
+    const put = x => {
+      if (!x || !x.date || !Number.isInteger(x.seq)) return;
+      const k = keyOf(x);
+      const cur = byKey.get(k);
+      if (!cur) { byKey.set(k, x); out.push(x); return; }
+      if ((cur.xid || '') && cur.xid === x.xid) {        // 同一筆，新的贏
+        if (at(x) > at(cur)) { out[out.indexOf(cur)] = x; byKey.set(k, x); }
+        return;
+      }
+      const curIsNewer = at(cur) > at(x);
+      const lose = curIsNewer ? x : cur;
+      const i = out.indexOf(lose);
+      if (i >= 0) out.splice(i, 1);
+      const moved = { ...lose, seq: nextSeq++ };
+      byKey.set(keyOf(curIsNewer ? cur : x), curIsNewer ? cur : x);
+      byKey.set(keyOf(moved), moved);
+      out.push(moved);
+    };
+    for (const x of rx) put(x);      // 遠端先放：平手時本機的號碼不動
+    for (const x of lx) put(x);
+
+    const norm = e => e === true ? { removed: true, at: '' }
+      : (e && typeof e === 'object') ? { removed: !!e.removed, at: e.at || '' } : null;
+    const lr = (localSem?.removed && typeof localSem.removed === 'object') ? localSem.removed : {};
+    const rr = (remoteSem?.removed && typeof remoteSem.removed === 'object') ? remoteSem.removed : {};
+    const removed = {};
+    for (const k of new Set([...Object.keys(rr), ...Object.keys(lr)])) {
+      const na = norm(rr[k]), nb = norm(lr[k]);
+      const win = !na ? nb : !nb ? na : (nb.at >= na.at ? nb : na);   // 平手時本機勝
+      if (win) removed[k] = win;
+    }
+
+    out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.seq - b.seq));
+    return { extras: out, removed };
+  }
+
+  // 存檔期間老師又加了課或刪了課時，把那份「還在記憶體裡的舊文件」的加／刪
+  // 併回即將提交的那份。live 當本機（平手時它贏，因為它才是最新按的那一下）。
+  // 兩邊一樣時是 no-op。
+  function reapplyOverlay(live, outgoing) {
+    for (const [cls, data] of Object.entries(live?.classes || {})) {
+      for (const sem of ['semester1', 'semester2']) {
+        const a = data?.[sem];
+        const b = outgoing?.classes?.[cls]?.[sem];
+        if (!a || !b) continue;
+        const ov = mergeOverlay(a, b);
+        if (ov.extras.length) b.extras = ov.extras;
+        if (Object.keys(ov.removed).length) b.removed = ov.removed;
+      }
+    }
+  }
+
   function mergeProgressData(local, remote, localPrevStamp) {
     const localStamp = local._meta?.last_modified || '';
     const remoteStamp = remote._meta?.last_modified || '';
@@ -945,6 +1102,13 @@
           }
         }
         out.lessons = [...byKey.values()].sort(compareRecords);
+
+        // 手動加的節與刪除的墓碑也要合併。少了這段，一台裝置加的節會被另一台
+        // 存檔時洗掉 —— 逐節紀錄那套只管勾選／備註，管不到「這節存不存在」。
+        const ov = mergeOverlay(ls, rs);
+        if (ov.extras.length) out.extras = ov.extras;
+        if (Object.keys(ov.removed).length) out.removed = ov.removed;
+
         merged.classes[cls][sem] = out;
       }
     }
@@ -1062,13 +1226,15 @@
 
       let outgoing = data;
       if (!force && !readErr && remote?._meta?.last_modified) {
-        // 雲端沒有 schema 2 = 上一次寫它的是舊版 app，合併的鍵還是 lesson 名次。
-        // 新舊版同時寫會撞號，先把遠端整份留一份底。不擋存檔 —— 讓老師的編輯
-        // 卡在離線，比偶爾多一份快照糟得多。每台裝置每次開啟只吵一次。
-        if (!remote._meta.schema && !state.warnedOldSchema) {
+        // 雲端的 schema 比這個版本舊 = 上一次寫它的是舊版 app：它不認得
+        // extras／removed，存一次檔就會把老師手動加的節和刪除紀錄洗掉。
+        // 先把遠端整份留一份底。不擋存檔 —— 讓老師的編輯卡在離線，比偶爾
+        // 多一份快照糟得多。每台裝置每次開啟只吵一次。
+        const remoteSchema = Number(remote._meta.schema || 1);
+        if (remoteSchema < 3 && !state.warnedOldSchema) {
           state.warnedOldSchema = true;
           takeSnapshot('雲端進度是舊版 app 寫的（尚未升級）', remote, true);
-          toast('有一台裝置的 app 還是舊版，已先備份雲端進度', 'warning');
+          toast('有一台裝置的 app 還是舊版，已先備份雲端進度 —— 手動加的節和刪除紀錄可能被它蓋掉', 'warning');
         }
         // 遠端有別台裝置寫過的東西 → 逐節合併，不再叫老師二選一。
         // 這裡不比對 last_modified 是否相等：buildProgressData() 每次都蓋新時間戳，
@@ -1086,6 +1252,12 @@
         // 5 格快照環會被最近的幾次編輯填滿，反而救不回上週的版本。
         takeSnapshot('同步前', state.progress);
       }
+
+      // 存檔是「先算好要寫的內容 → 打網路 → 才提交本機」。老師在打網路那段時間
+      // 按了加課／刪課的話，那個改動寫在舊的 state.progress 上，會被下面的提交
+      // 蓋掉 —— 課堂的勾選、備註不會（它們住在 state.lessons），但加／刪的家
+      // 就在這份文件裡，非補不可。聯集是冪等的，平常這一步等於沒做事。
+      reapplyOverlay(state.progress, outgoing);
 
       // 本機先提交再打網路：就算網路失敗，編輯也已經落在 localStorage。
       // dirtyLessons 可以在這裡清掉 —— 時間戳已經寫進 outgoing，下一次重試
@@ -1520,22 +1692,33 @@
           <div class="icon">📅</div>
           <h3>${state.dayOffset === 0 ? '今天沒有課堂' : '當天沒有課堂'}</h3>
           <p>切換到「本週課表」查看本週安排</p>
+          <button class="btn btn-outline" id="day-add-lesson">＋ 加一節</button>
         </div>`);
+      container.querySelector('#day-add-lesson')
+        ?.addEventListener('click', () => openAddLessonModal({ date: viewDateStr }));
       return;
     }
 
-    // 「全部完成」那條只在當天還有沒勾的課時出現。
+    // 「全部完成」那條只在當天還有沒勾的課時出現；「加一節」則一直在 ——
+    // 代課、調課都是臨時發生的，不該因為當天已經全部勾完就找不到那顆掣。
     const dayUndone = dayLessons.filter(l => !l.done).length;
-    const dayBarHtml = dayUndone === 0 ? '' : `
+    const doneAllHtml = dayUndone === 0 ? ''
+      : `<button class="btn btn-sm btn-success" id="day-done-all">✓ 全部完成</button>`;
+    const dayBarHtml = `
       <div class="day-actions">
-        <span class="day-actions-text">${dayUndone} 節未完成</span>
-        <button class="btn btn-sm btn-success" id="day-done-all">✓ 全部完成</button>
+        <span class="day-actions-text">${dayUndone === 0 ? '' : `${dayUndone} 節未完成`}</span>
+        <span class="day-actions-btns">
+          ${doneAllHtml}
+          <button class="btn btn-sm btn-outline" id="day-add-lesson">＋ 加一節</button>
+        </span>
       </div>`;
 
     paintLessons(container, dayBarHtml + dayLessons.map(l => renderLessonCard(l)).join(''));
 
     const doneAllBtn = container.querySelector('#day-done-all');
     if (doneAllBtn) doneAllBtn.addEventListener('click', () => markDayDone(viewDateStr));
+    container.querySelector('#day-add-lesson')
+      ?.addEventListener('click', () => openAddLessonModal({ date: viewDateStr }));
   }
 
   // ============ UI: WEEK VIEW ============
@@ -1568,29 +1751,28 @@
 
     const todayStr = fmtDate(td);
 
-    if (weekLessons.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="icon">📅</div>
-          <h3>本週沒有課堂</h3>
-        </div>`;
-      return;
-    }
-
     const grouped = {};
     for (const l of weekLessons) {
       if (!grouped[l.date]) grouped[l.date] = [];
       grouped[l.date].push(l);
     }
 
+    // 七天全部列出來，不是只列有課的那幾天。加一節最常見的用途正是「這天本來
+    // 沒有課，代課／調課多了一節」—— 只列有課的日子，那一天就沒有標題列、
+    // 也就按不到那顆掣。
     let html = '';
-    for (const [date, lessons] of Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (let i = 0; i < 7; i++) {
+      const date = fmtDate(addDays(weekStart, i));
+      const lessons = grouped[date] || [];
       const isToday = date === todayStr;
-      html += `<div style="margin-bottom:24px">`;
-      html += `<div style="font-size:14px;font-weight:600;color:${isToday ? 'var(--primary)' : 'var(--gray-600)'};margin-bottom:8px;padding-left:4px">
-        ${fmtDisplay(date)}${isToday ? ' (今天)' : ''}
+      html += `<div class="week-day">`;
+      html += `<div class="week-day-head${isToday ? ' today' : ''}">
+        <span>${fmtDisplay(date)}${isToday ? ' (今天)' : ''}</span>
+        <button class="btn btn-sm btn-outline add-lesson-btn" data-date="${date}">＋ 加一節</button>
       </div>`;
-      html += lessons.map(l => renderLessonCard(l)).join('');
+      html += lessons.length
+        ? lessons.map(l => renderLessonCard(l)).join('')
+        : '<div class="week-day-empty">沒有課</div>';
       html += `</div>`;
     }
     paintLessons(container, html);
@@ -1687,6 +1869,9 @@
     });
     container.querySelectorAll('.hw-btn').forEach(btn => {
       btn.addEventListener('click', () => openHwModal(btn.dataset.id));
+    });
+    container.querySelectorAll('.add-lesson-btn').forEach(btn => {
+      btn.addEventListener('click', () => openAddLessonModal({ date: btn.dataset.date }));
     });
 
     // 每按一鍵就寫回 state，不等失焦。這不只是「早點存」—— apiSaveProgress
@@ -2008,6 +2193,7 @@
     const lastSync = lsGet(LS_KEYS.lastSync, '');
     const snaps = getSnapshots();
 
+    const removedN = removedKeys().length;
     const snapshotHtml = snaps.length === 0
       ? `<p style="font-size:13px;color:var(--gray-400);line-height:1.7">尚無備份。每次同步、重設進度或還原前，會自動保留當下的版本，最多 5 份。</p>`
       : snaps.map((s, i) => `
@@ -2068,6 +2254,14 @@
           <button class="btn btn-outline" id="btn-import-data">📥 匯入 JSON</button>
           <button class="btn btn-danger" id="btn-reset-progress">🗑 重設進度</button>
         </div>
+        ${removedN === 0 ? '' : `
+          <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid var(--gray-100)">
+            <div style="flex:1;font-size:13px;color:var(--gray-500)">
+              有 ${removedN} 節仍在「已刪除」狀態。刪除紀錄只增不減，換過 plan 之後
+              有可能想全部復原。
+            </div>
+            <button class="btn btn-sm btn-outline" id="btn-restore-removed">↩ 全部復原</button>
+          </div>`}
         <input type="file" id="import-file" accept=".json" style="display:none">
       </div>
 
@@ -2095,6 +2289,7 @@
     $('btn-import-data')?.addEventListener('click', () => $('import-file')?.click());
     $('import-file')?.addEventListener('change', importData);
     $('btn-reset-progress')?.addEventListener('click', resetProgress);
+    $('btn-restore-removed')?.addEventListener('click', restoreAllRemoved);
     $('btn-clear-snapshots')?.addEventListener('click', clearSnapshots);
     container.querySelectorAll('.snap-restore-btn').forEach(btn => {
       btn.addEventListener('click', () => restoreSnapshot(Number(btn.dataset.index)));
@@ -2108,6 +2303,173 @@
       if (l) return l;
     }
     return null;
+  }
+
+  // ============ 手動加課節 / 刪課節 ============
+  //
+  // 代課、調課時老師要自己加一節（揀第幾節、自己填內容），或把某一節刪掉。
+  // 關鍵約束：刪掉一節**不會**把後面的教學內容往前補 —— 內容是照位置派下去的
+  // （buildClassLessons 的 content[idx]），所以刪除只在派完內容之後過濾。
+  //
+  // 加／刪都不是事後改 state.lessons：課堂每次都由 plan 整個重建（存檔成功也會），
+  // 直接塞進去的東西下一次存檔就沒了。所以它們存在進度文件的 extras / removed 裡，
+  // 由 buildClassLessons 產生課堂時套用。
+
+  // 加／刪的專用時間戳。跟 stampNow 一樣要單調遞增，理由也一樣：裝置時鐘偏慢時，
+  // 剛寫下的這一筆會輸給別台裝置較舊的那一筆。但兩者不能共用計數 —— stampNow 夾的是
+  // 文件層的 _meta.last_modified，這裡夾的是單筆的 at，而且同一秒內連續加兩節、
+  // 又或者雲端上已經有一筆時鐘跑在前面的 at，都得贏過去。
+  let lastOverlayAt = '';
+  function overlayStamp() {
+    let floor = lastOverlayAt;
+    for (const cd of Object.values(state.progress?.classes || {})) {
+      for (const sem of ['semester1', 'semester2']) {
+        for (const x of (Array.isArray(cd?.[sem]?.extras) ? cd[sem].extras : [])) {
+          if (x?.at > floor) floor = x.at;
+        }
+        for (const e of Object.values(cd?.[sem]?.removed || {})) {
+          if (e?.at > floor) floor = e.at;
+        }
+      }
+    }
+    const now = new Date().toISOString();
+    lastOverlayAt = now > floor ? now : new Date(new Date(floor).getTime() + 1).toISOString();
+    return lastOverlayAt;
+  }
+
+  // 手動加的那一節要歸到哪個學期？照日期落在那一段。落在兩學期之間（假期）或
+  // 兩段之外，就歸給比較近的那一段 —— 一定要有個答案，回 null 的話那一節會
+  // 沒有學期可存，老師加了卻看不到。
+  function semKeyForDate(dateStr) {
+    const d = parseDate(dateStr);
+    const { s1, s2 } = getSemesterRanges();
+    if (s1 && d >= s1.start && d <= s1.end) return 'semester1';
+    if (s2 && d >= s2.start && d <= s2.end) return 'semester2';
+    // 兩段都拿不到（plan 少了學期日期）時 Infinity <= Infinity，固定選上學期，
+    // 至少是個確定的答案。
+    const before = r => !r ? Infinity : Math.abs(d - r.end);     // 到上學期結束的距離
+    const after = r => !r ? Infinity : Math.abs(d - r.start);    // 到下學期開始的距離
+    return before(s1) <= after(s2) ? 'semester1' : 'semester2';
+  }
+
+  // 老師揀了第幾節之後，上課時間自動帶入。同一個節次在不同星期可能不同時間
+  // （例如星期六補課、或調動過的時段），所以先找那一天自己的時段，找不到才
+  // 退回該班任何一天的同一個節次。都沒有就留空，不編一個時間出來。
+  function slotForPeriod(className, dateStr, period) {
+    if (!Number.isInteger(period)) return { period: null, time: '' };
+    const slots = state.plan?.schedule?.[className]?.weekly_slots || [];
+    const dow = dayOfWeek(parseDate(dateStr));
+    const onDay = slots.filter(s => DAYS[s.day] === dow && s.period === period);
+    const hit = (onDay.length ? onDay : slots.filter(s => s.period === period))[0];
+    return { period, time: hit?.time || '' };
+  }
+
+  // 取得（必要時建立）某班某學期的加／刪容器。
+  function semBucket(className, semKey) {
+    if (!state.progress) state.progress = { _meta: {}, classes: {} };
+    if (!state.progress.classes) state.progress.classes = {};
+    const cd = state.progress.classes[className] || (state.progress.classes[className] = {});
+    const s = cd[semKey] || (cd[semKey] = {});
+    if (!Array.isArray(s.extras)) s.extras = [];
+    if (!s.removed || typeof s.removed !== 'object') s.removed = {};
+    return s;
+  }
+
+  function addExtraLesson({ className, date, period, time, topic }) {
+    if (!state.plan?.schedule?.[className]) return null;
+    const semKey = semKeyForDate(date);
+    const bucket = semBucket(className, semKey);
+
+    // seq 由 100 起跳（自動排的一天最多幾節，永遠是個位數），而且是取
+    // 「該日現有最大值 + 1」，不是「有幾條」—— 刪掉中間一條時其他條的號碼
+    // 才不會跟著位移，日期#seq 這個身分才穩得住。
+    let max = 99;
+    for (const x of bucket.extras) {
+      if (x.date === date && Number.isInteger(x.seq) && x.seq > max) max = x.seq;
+    }
+    // 墓碑也佔號碼：否則刪掉第 100 節之後再加一節，新的又拿到 100，
+    // 產生時會被那個墓碑濾掉 —— 老師加了卻看不到。
+    for (const k of Object.keys(bucket.removed)) {
+      const [d, s] = k.split('#');
+      if (d === date && Number(s) > max) max = Number(s);
+    }
+
+    const seq = max + 1;
+    bucket.extras.push({
+      date, seq,
+      period: Number.isInteger(period) ? period : null,
+      time: time || '',
+      topic: topic || '',
+      // 跨裝置合併要靠它認出「這是同一節」。兩台裝置離線時各自新增，日期和
+      // seq 有機會撞在一起，那時就靠 xid 分辨是同一筆還是兩筆。
+      xid: `x${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+      at: overlayStamp()
+    });
+    refreshAfterOverlay();
+    return seq;
+  }
+
+  // 刪除與復原都走這裡。復原刻意**不**把 removed 那條刪掉，而是改寫成
+  // {removed:false}：直接刪掉的話，別台裝置上還留著 {removed:true} 的那筆，
+  // 下一次合併就會把刪除復活。
+  function setLessonRemoved(className, semester, date, seq, removed) {
+    const bucket = semBucket(className, semester);
+    bucket.removed[`${date}#${seq}`] = { removed: !!removed, at: overlayStamp() };
+    refreshAfterOverlay();
+  }
+
+  // 加／刪之後一定要重跑 generateLessonSlots：課堂是每次都由 plan 重建的，
+  // 只改 state.progress 的話畫面不會動，而且下一次存檔成功又會再重建一次。
+  // 現在就重建，畫面跟即將存出去的文件才是一致的。
+  //
+  // 重建之前先把記憶體裡的勾選／備註寫回文件（buildProgressData）。少了這一步，
+  // 剛勾完、還沒等到 debounce 存檔的那一節會被抓去重建，而它的舊紀錄又把
+  // done 蓋回 false —— 刪一節再按復原，勾選就靜靜消失了。
+  function refreshAfterOverlay() {
+    markDirty();
+    state.progress = buildProgressData();
+    generateLessonSlots();
+    renderAll();
+    repaintOpenDayModal();
+  }
+
+  function deleteLesson(id) {
+    const l = findLesson(id);
+    if (!l) return;
+    const { class: className, semester, date, seq } = l;
+    setLessonRemoved(className, semester, date, seq, true);
+    // 復原記的是欄位不是物件：存檔、換 plan 都會把課堂物件整批換掉（同 markDayDone）。
+    toast(`🗑 已刪除 ${fmtDisplay(date)} 第${seq}節`, 'info', {
+      label: '復原',
+      onClick: () => { setLessonRemoved(className, semester, date, seq, false); toast('已復原這一節', 'success'); }
+    });
+  }
+
+  // 刪除的墓碑只增不減（見 setLessonRemoved）。換過 plan、或者隔了很久想從頭
+  // 來過時，需要一個總開關 —— 不然那些墓碑會永遠靜靜地把對應的節藏起來，
+  // 而畫面上完全看不出來。這裡把「還標記著已刪除」的都列出來。
+  function removedKeys() {
+    const out = [];
+    for (const [cls, cd] of Object.entries(state.progress?.classes || {})) {
+      for (const sem of ['semester1', 'semester2']) {
+        const r = cd?.[sem]?.removed;
+        for (const [k, e] of Object.entries(r && typeof r === 'object' ? r : {})) {
+          if (e === true || e?.removed === true) out.push({ cls, sem, k });
+        }
+      }
+    }
+    return out;
+  }
+
+  function restoreAllRemoved() {
+    const list = removedKeys();
+    if (list.length === 0) return;
+    if (!confirm(`把刪除過的 ${list.length} 節全部復原？\n\n包括你確實想刪掉的那些。其他資料不會動。`)) return;
+    for (const { cls, sem, k } of list) {
+      semBucket(cls, sem).removed[k] = { removed: false, at: overlayStamp() };
+    }
+    refreshAfterOverlay();
+    toast(`已復原 ${list.length} 節`, 'success');
   }
 
   // 一次勾完某一天。請假、或隔了幾天才想到要補登時，一節一節點很痛苦。
@@ -2288,11 +2650,14 @@
     $('modal-footer').innerHTML = (undone === 0 ? '' : `
         <span class="day-modal-count">${undone} 節未完成</span>
         <button class="btn btn-success" id="day-modal-done-all">✓ 全部完成</button>`)
+      + `<button class="btn btn-outline" id="day-modal-add">＋ 加一節</button>`
       + '<button class="btn btn-outline" id="day-modal-close">關閉</button>';
     overlay.classList.add('open');
 
     $('day-modal-close')?.addEventListener('click', () => overlay.classList.remove('open'));
     $('day-modal-done-all')?.addEventListener('click', () => markDayDone(dateStr));
+    // 加完回到這一天，老師才看得到自己剛加了什麼（見 openAddLessonModal 的 returnToDay）。
+    $('day-modal-add')?.addEventListener('click', () => openAddLessonModal({ date: dateStr, returnToDay: dateStr }));
     // 再點一節 → 進到單節的詳細視窗（同一層 overlay，直接換內容）。
     $('modal-body').querySelectorAll('.day-modal-item').forEach(item => {
       item.addEventListener('click', () => openLessonModal(item.dataset.id));
@@ -2335,11 +2700,21 @@
         <input type="date" id="modal-hw-due" value="${hwData.due || ''}">
       </div>`;
 
+    // 刪除只放在這裡，不放課卡上 —— 課卡是每天在點的，一顆紅掣擺在那裡
+    // 早晚會誤按，而在這個視窗裡按，前後都有確認。
     $('modal-footer').innerHTML = `
+      <button class="btn btn-danger" id="modal-delete">🗑 刪除這一節</button>
       <button class="btn ${l.done ? 'btn-outline' : 'btn-success'}" id="modal-toggle-done">${l.done ? '取消完成' : '✓ 標記完成'}</button>
       <button class="btn btn-outline" id="modal-cancel">取消</button>
       <button class="btn btn-primary" id="modal-save">儲存</button>`;
     overlay.classList.add('open');
+
+    $('modal-delete').onclick = () => {
+      const when = `${fmtDisplay(l.date)} ${classPeriod(l)}`;
+      if (!confirm(`刪除 ${when} 這一節？\n\n其他節的教學內容不會往前補，就只是少了這一節。\n（刪除後 8 秒內可以按「復原」）`)) return;
+      overlay.classList.remove('open');
+      deleteLesson(l.id);
+    };
 
     $('modal-toggle-done').onclick = () => {
       l.done = !l.done;
@@ -2362,6 +2737,105 @@
     };
 
     $('modal-cancel').onclick = () => overlay.classList.remove('open');
+  }
+
+  // 「＋ 加一節」：代課、調課時手動加一節。內容自己填，不從該班的內容序列拿 ——
+  // 老師要的是「這天多了一節」，不是把後面的內容往前推。
+  function openAddLessonModal(opts = {}) {
+    const overlay = $('modal-overlay');
+    if (!overlay) return;
+    const classes = Object.keys(state.plan?.schedule || {});
+    if (classes.length === 0) { toast('plan 裡沒有任何班級', 'error'); return; }
+
+    // 同 openLessonModal：這不是「當天清單」，開著時別讓 repaintOpenDayModal 蓋回來。
+    state.dayModalDate = null;
+
+    const date0 = /^\d{4}-\d{2}-\d{2}$/.test(opts.date || '') ? opts.date : fmtDate(today());
+    const only = state.selectedClasses.size === 1 ? [...state.selectedClasses][0] : null;
+    const cls0 = classes.includes(opts.className) ? opts.className
+      : (only && classes.includes(only)) ? only : classes[0];
+
+    $('modal-title').textContent = '加一節';
+    $('modal-body').innerHTML = `
+      <div class="form-group">
+        <label>班級</label>
+        <select id="add-lesson-class">
+          ${classes.map(c => `<option value="${escHtml(c)}"${c === cls0 ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>日期</label>
+        <input type="date" id="add-lesson-date" value="${date0}">
+      </div>
+      <div class="form-group">
+        <label>第幾節</label>
+        <select id="add-lesson-period"></select>
+      </div>
+      <div class="form-group">
+        <label>上課內容</label>
+        <input type="text" id="add-lesson-topic" placeholder="例：代課 — 溫習第 3 章">
+      </div>
+      <div class="form-hint" id="add-lesson-hint"></div>`;
+
+    $('modal-footer').innerHTML = `
+      <button class="btn btn-outline" id="add-lesson-cancel">取消</button>
+      <button class="btn btn-primary" id="add-lesson-ok">＋ 加入</button>`;
+    overlay.classList.add('open');
+
+    // 節次選項由該班的固定課表去重而來（同一個節次只出一次），另加「不指定」——
+    // 課節表有時只寫了有幾節、沒寫第幾節（那天不在該班的固定課表上）。
+    const periodsOf = cls => {
+      const seen = new Map();
+      for (const s of (state.plan?.schedule?.[cls]?.weekly_slots || [])) {
+        if (Number.isInteger(s.period) && !seen.has(s.period)) seen.set(s.period, s.time || '');
+      }
+      return [...seen.entries()].sort((a, b) => a[0] - b[0]);
+    };
+
+    // 時間由節次自動帶入。刻意顯示出來讓老師看到它帶了什麼 —— 帶錯時間比不帶更難察覺。
+    const paintHint = () => {
+      const raw = $('add-lesson-period').value;
+      const { time } = slotForPeriod(
+        $('add-lesson-class').value, $('add-lesson-date').value,
+        raw === '' ? null : Number(raw));
+      $('add-lesson-hint').textContent = time ? `上課時間會記為 ${time}` : '';
+    };
+
+    const paintPeriods = () => {
+      const periods = periodsOf($('add-lesson-class').value);
+      $('add-lesson-period').innerHTML = periods.map(([p, t]) =>
+        `<option value="${p}">第${p}節${t ? '（' + escHtml(t) + '）' : ''}</option>`).join('')
+        + '<option value="">不指定節次</option>';
+      paintHint();
+    };
+
+    $('add-lesson-class').onchange = paintPeriods;
+    $('add-lesson-period').onchange = paintHint;
+    $('add-lesson-date').onchange = paintHint;
+    paintPeriods();
+
+    const close = () => overlay.classList.remove('open');
+    $('add-lesson-cancel').onclick = close;
+
+    $('add-lesson-ok').onclick = () => {
+      const className = $('add-lesson-class').value;
+      const date = $('add-lesson-date').value;
+      const raw = $('add-lesson-period').value;
+      const period = raw === '' ? null : Number(raw);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('請揀一個日期', 'error'); return; }
+      const { time } = slotForPeriod(className, date, period);
+      addExtraLesson({ className, date, period, time, topic: $('add-lesson-topic').value.trim() });
+      // 從當天清單進來的，加完要回到那一天 —— 否則老師眼前只剩一個空日曆，
+      // 看不到自己剛加了什麼。
+      if (opts.returnToDay) openDayModal(opts.returnToDay); else close();
+      toast(`＋ 已加一節：${className} ${fmtDisplay(date)}${period ? ` 第${period}節` : ''}`, 'success');
+    };
+
+    // 內容打完直接按 Enter 就加入，不必去摸滑鼠。
+    $('add-lesson-topic').addEventListener('keydown', e => {
+      if (e.key === 'Enter') $('add-lesson-ok').click();
+    });
+    $('add-lesson-topic').focus();
   }
 
   function openHwModal(id) {
