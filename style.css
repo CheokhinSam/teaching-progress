@@ -285,7 +285,10 @@ body {
   font-size: 14px;
   font-weight: 600;
   color: var(--gray-600);
-  margin-bottom: 8px;
+  /* 16px 而唔是 8px：下面嗰顆「＋ 加一節」嘅感應區撐到 44px，會伸出按鈕
+     底邊約 8px。留 8px 嘅話佢會蓋住下面課卡嘅頂部，老師想撳課卡就會誤觸
+     加入。16px 同 day-actions、week-nav 一致，兩邊都有位走。 */
+  margin-bottom: 16px;
   padding-left: 4px;
 }
 
@@ -439,6 +442,32 @@ body {
 .btn-sm {
   padding: 5px 10px;
   font-size: 12px;
+}
+
+/* 手指按得到的範圍。
+   .check-btn 一早照 44px 做，仲寫明「44px 是好按的最小尺寸」—— 但全 app 只有
+   佢一個跟。.btn-sm 得 27px 高、.toast-action 25px，而佢哋正是「✓ 全部完成」、
+   「＋ 加一節」、「➜ 加到下一節」同「復原」：每日撳幾十次，而「復原」仲要喺
+   8 秒之內撳到。
+   用偽元素把感應區撐到 44px 高，視覺大細同版面完全不變 —— 直接把按鈕改高
+   會撐爆 week-nav 同 day-actions 啲一行式工具列。
+   只向上下擴，所以左右相鄰嘅按鈕唔會互相搶。 */
+.btn-sm,
+.toast-action,
+.modal-close {
+  position: relative;
+}
+
+.btn-sm::after,
+.toast-action::after,
+.modal-close::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
 }
 
 .btn-lg {

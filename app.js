@@ -44,8 +44,14 @@
     editSeq: 0,          // 每次編輯遞增，用來判斷存檔過程中間有沒有新編輯
     saveInFlight: false,
     saveQueued: false,
+    // 排隊那次是不是「使用者明確要覆蓋」。不記住它的話，還原／重設／匯入
+    // 撞上進行中的存檔，就會被當成普通存檔跑 —— 變成合併，但呼叫端已經
+    // 彈咗成功。
+    saveQueuedForce: false,
     retryDelay: 0,
     retryTimer: null,
+    // 「雲端檔案壞了」只在這個工作階段講一次（見 warnCorruptOnce）。
+    warnedCorrupt: false,
     calendarMonth: null,  // { year, month } for calendar view
     weekOffset: 0,        // 0 = current week, -1 = last week, 1 = next week
     dayOffset: 0,         // 0 = today, -1 = yesterday, 1 = tomorrow
@@ -1129,10 +1135,20 @@
   function pickGistFile(gist, name) {
     const files = gist?.files || {};
     const names = Object.keys(files);
-    if (files[name]?.content) return files[name];
-    if (names.length === 1 && files[names[0]]?.content) return files[names[0]];
+    // GitHub 的 Gist API 每個檔案最多回 1MB，超過就截斷並在檔案物件上標
+    // truncated。截斷的內容一定 parse 不了，但那個錯誤訊息會指向 JSON 語法，
+    // 看不出真正的原因。寧可把它當成一份壞檔一開口就講清楚。
+    const pick = f => {
+      if (f?.truncated) {
+        throw badJson(`雲端那份 ${name} 超過 Gist API 的 1MB 上限，讀回來的是被截斷的半份。`
+          + '請在電腦上直接開啟那個 Gist，把檔案縮小或分拆。');
+      }
+      return f;
+    };
+    if (files[name]?.content) return pick(files[name]);
+    if (names.length === 1 && files[names[0]]?.content) return pick(files[names[0]]);
     const jsonNames = names.filter(n => n.endsWith('.json'));
-    if (jsonNames.length === 1 && files[jsonNames[0]]?.content) return files[jsonNames[0]];
+    if (jsonNames.length === 1 && files[jsonNames[0]]?.content) return pick(files[jsonNames[0]]);
     const e = new Error(`Gist 裡找不到 ${name}${names.length ? `（現有：${names.join('、')}）` : '（這個 Gist 是空的）'}`);
     e.fatal = true;   // 檔名被改過，重試也不會好
     throw e;
@@ -1144,7 +1160,8 @@
     if (!res.ok) throw new Error(`載入 plan 失敗: ${res.status}`);
     const gist = await res.json();
     const file = pickGistFile(gist, 'plan.json');
-    state.plan = JSON.parse(file.content);
+    try { state.plan = JSON.parse(file.content); }
+    catch (e) { throw badJson(`雲端那份 plan.json 的內容不是有效的 JSON（${e.message}）`); }
     lsSet(LS_KEYS.plan, state.plan);
     return state.plan;
   }
@@ -1157,7 +1174,8 @@
     if (!res.ok) throw new Error(`載入進度失敗: ${res.status}`);
     const gist = await res.json();
     const file = pickGistFile(gist, 'progress.json');
-    state.progress = JSON.parse(file.content);
+    try { state.progress = JSON.parse(file.content); }
+    catch (e) { throw badJson(`雲端那份 progress.json 的內容不是有效的 JSON（${e.message}）`); }
     lsSet(LS_KEYS.progress, state.progress);
     // 剛載入完，本機和遠端必然一致 —— 記下遠端時間戳，下次才知道本機有沒有未送出的東西
     lsSet(LS_KEYS.lastRemoteStamp, state.progress._meta?.last_modified || null);
@@ -1192,6 +1210,25 @@
     return e;
   }
 
+  // 遠端的 JSON 壞掉時，JSON.parse 拋的是 SyntaxError —— 它沒有 .status，
+  // isRetryable 會當成網路問題，於是每 5 分鐘重試一次、永遠不會好，而橫幅
+  // 只寫「尚未同步」。老師看到的是「一直同步唔到」，完全查不出原因，也唔知
+  // 要處理。給它一個身分：講得出是哪一份檔案壞了，而且不可重試。
+  function badJson(message) {
+    const err = new Error(message);
+    err.fatal = true;      // 重試一百次也不會好
+    err.corrupt = true;    // 呼叫端據此出聲，而不是靜默退避
+    return err;
+  }
+
+  // 壞檔不會自己好，所以每次切回畫面、每次存檔都會再撞到同一個錯。每次都彈
+  // 一次只是噪音 —— 講過一次就夠，橫幅本來就一直在講「尚未同步」。
+  function warnCorruptOnce(e) {
+    if (!e?.corrupt || state.warnedCorrupt) return;
+    state.warnedCorrupt = true;
+    toast(`${e.message}（本機進度未受影響）`, 'error');
+  }
+
   // 401/403（token 失效）、404（gist 被刪）、422（格式被拒）重試一百次也不會好
   function isRetryable(err) {
     if (err?.fatal) return false;
@@ -1206,9 +1243,34 @@
     state.retryTimer = setTimeout(() => { state.retryTimer = null; saveProgressNow(); }, state.retryDelay);
   }
 
+  // 整份換掉 state.progress 的操作（還原／重設／匯入）動手之前要跑這個。
+  //
+  // 為什麼非等不可：一次存檔會在打網路「之前」就先把要寫的內容算好，網路回來
+  // 才提交本機（見 apiSaveProgress 的提交段）。如果這段等待期間 state.progress
+  // 被換掉了，它收尾時會把自己那份舊版本寫回 state.progress 同 localStorage，
+  // 整個還原／重設就被撤銷 —— 而畫面已經彈咗「成功」。
+  //
+  // 等太久（網路卡住）就放棄並出聲。讓它無限期等下去，老師只會見到畫面冇反應；
+  // 靜靜照做，則是做一件隨時會被打回票的事。
+  async function waitForSaveIdle(action) {
+    const deadline = Date.now() + 10000;
+    while (state.saveInFlight) {
+      if (Date.now() > deadline) {
+        toast(`同步還在進行中，${action}已取消 —— 請稍後再試`, 'warning');
+        return false;
+      }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    return true;
+  }
+
   // force = 使用者明確選擇要覆蓋（還原／重設／匯入），跳過合併
   async function apiSaveProgress(force) {
-    if (state.saveInFlight) { state.saveQueued = true; return; }
+    if (state.saveInFlight) {
+      state.saveQueued = true;
+      if (force) state.saveQueuedForce = true;
+      return;
+    }
     state.saveInFlight = true;
     const seq = state.editSeq;
     try {
@@ -1315,19 +1377,34 @@
       throw e;
     } finally {
       state.saveInFlight = false;
-      if (state.saveQueued) { state.saveQueued = false; state.saveTimer = setTimeout(saveProgressNow, 0); }
+      if (state.saveQueued) {
+        state.saveQueued = false;
+        // 排隊那次的 force 要帶下去。掉了的話，剛剛那次「覆蓋雲端」會變成
+        // 一次普通合併 —— 而呼叫端早就彈咗成功。
+        const queuedForce = state.saveQueuedForce;
+        state.saveQueuedForce = false;
+        state.saveTimer = setTimeout(() => saveProgressNow(queuedForce), 0);
+      }
     }
   }
 
   // 立即儲存。手機切離畫面時計時器會被凍結，所以 markDirty 的計時器等不到 ——
   // visibilitychange 必須能直接呼叫這個函式把待存的內容送出去。
-  function saveProgressNow() {
+  function saveProgressNow(force) {
     clearTimeout(state.saveTimer);
-    apiSaveProgress()
+    // force 只有排隊那條路會傳（見 apiSaveProgress 的 finally）。
+    // 其餘呼叫端都是計時器直接叫，沒有參數。
+    // 一定要寫死 === true：這個函式有被 setTimeout(…, 2000) 直接當回呼用的地方，
+    // 哪天有人改成 addEventListener('click', saveProgressNow)，傳進來的會是一個
+    // 事件物件 —— 真值。那會把每一次點擊都變成「強制覆蓋雲端」。
+    apiSaveProgress(force === true)
       .then(ok => { if (ok) toast('已同步', 'success'); })   // 排隊中的那次不報成功
       .catch(e => {
         if (e.status === 401 || e.status === 403) { toast(`${e.message}——請到設定頁更新 Token`, 'error'); return; }
         if (e.status === 404) { toast(`${e.message}——Gist 可能已被刪除`, 'error'); return; }
+        // 檔案壞掉不是「再試一次就好」，不能只說「同步失敗」。而且要講明本機
+        // 沒事，否則老師會以為進度沒了。
+        if (e.corrupt) { warnCorruptOnce(e); return; }
         toast('同步失敗: ' + e.message, 'error');
       })
       .finally(() => renderSyncBanner());
@@ -1407,11 +1484,15 @@
     } catch { return '（無法讀取）'; }
   }
 
-  function restoreSnapshot(index) {
+  async function restoreSnapshot(index) {
+    // 先把這一份抓在手上再做事。清單是 render 那一刻影下來的，而每次存檔都會
+    // 往前面插一份新快照 —— 中途只要存過一次，之後按 index 去拿就會拿到隔壁
+    // 那一份。抓著物件本身，index 再怎麼位移都不影響。
     const snap = getSnapshots()[index];
     if (!snap) return;
     const when = new Date(snap.at).toLocaleString('zh-TW');
     if (!confirm(`確定還原到 ${when} 的版本？\n\n目前的進度會被覆蓋，但還原前會自動保留現況。`)) return;
+    if (!await waitForSaveIdle('還原')) return;
 
     let restored;
     try { restored = JSON.parse(snap.body); }
@@ -1444,7 +1525,8 @@
     if (!res.ok) throw httpError(res.status, '讀取遠端進度失敗');
     const gist = await res.json();
     const file = pickGistFile(gist, 'progress.json');
-    return JSON.parse(file.content);
+    try { return JSON.parse(file.content); }
+    catch (e) { throw badJson(`雲端那份 progress.json 的內容不是有效的 JSON（${e.message}）`); }
   }
 
   async function apiVerifyToken(token) {
@@ -1588,6 +1670,8 @@
     $('btn-resend-force')?.addEventListener('click', async () => {
       // 上次的明確覆蓋沒送出去，讓老師自己決定要不要現在覆蓋 ——
       // 當初要求覆蓋的那份文件可能已經被別的裝置改過了，不能靜默自動重送。
+      // 這顆掣的意義就是「這次真的要覆蓋」，所以不能撞上進行中的存檔被吃掉。
+      if (!await waitForSaveIdle('覆蓋')) return;
       try { await apiSaveProgress(true); toast('已覆蓋雲端', 'success'); }
       catch (e) { toast('同步失敗: ' + e.message, 'error'); }
       lastBannerState = null;
@@ -2985,6 +3069,8 @@
         toast('匯入失敗: 檔案裡沒有可用的 plan 或 progress', 'error');
         return;
       }
+      // 驗完形狀才等 —— 等只是為了不撞上進行中的存檔，檔案本身有問題就早些講。
+      if (!await waitForSaveIdle('匯入')) return;
 
       if (planOk) { state.plan = plan; lsSet(LS_KEYS.plan, plan); }
       if (progressOk) { state.progress = progress; lsSet(LS_KEYS.progress, progress); }
@@ -3010,6 +3096,7 @@
 
   async function resetProgress() {
     if (!confirm('確定要重設所有進度？\n\n重設前會自動保留一份備份，可從「版本紀錄」還原。')) return;
+    if (!await waitForSaveIdle('重設')) return;
     takeSnapshot('重設前', state.progress, true);   // 最危險的操作，強制留一份
     initEmptyProgress();
     generateLessonSlots();
@@ -3129,7 +3216,12 @@
           }
           generateLessonSlots();
           renderAll();
-        } catch { }
+        } catch (e) {
+          // 網路問題照樣靜默 —— 那是暫時的，而且橫幅已經在講「尚未同步」。
+          // 但檔案壞掉／被截斷不會自己好，靜默的話老師只會見到一個永遠同步
+          // 不到的 app，查不出原因。
+          warnCorruptOnce(e);
+        }
       } catch {
         showSetup();
       }
@@ -3200,7 +3292,7 @@
         if (state.progressGistId) await apiLoadProgress();
         generateLessonSlots();
         renderAll();
-      } catch { }
+      } catch (e) { warnCorruptOnce(e); }
     });
 
     // 恢復連線就立刻再試一次，不必等退避計時器跑完
