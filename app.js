@@ -2800,7 +2800,20 @@
       deleteLesson(l.id);
     };
 
+    // 把表單上的四個欄位寫回這一節。抽出來是因為「標記完成」也要做同一件事 ——
+    // 課後備註是下課後才寫的，老師很自然係寫完就撳「✓ 標記完成」（那正是他這節
+    // 做完的動作）。原本那顆掣只反轉 done、不讀表單，寫好的備註就隨住視窗關閉
+    // 一齊消失，而且完全沒有提示。
+    const applyForm = () => {
+      l.topic = $('modal-topic').value.trim() || l.topic;
+      l.note = $('modal-note').value.trim();
+      const hwTopic = $('modal-hw-topic').value.trim();
+      const hwDue = $('modal-hw-due').value;
+      l.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
+    };
+
     $('modal-toggle-done').onclick = () => {
+      applyForm();
       l.done = !l.done;
       markLessonDirty(l.id);
       overlay.classList.remove('open');
@@ -2809,11 +2822,7 @@
     };
 
     $('modal-save').onclick = () => {
-      l.topic = $('modal-topic').value.trim() || l.topic;
-      l.note = $('modal-note').value.trim();
-      const hwTopic = $('modal-hw-topic').value.trim();
-      const hwDue = $('modal-hw-due').value;
-      l.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
+      applyForm();
       markLessonDirty(l.id);
       overlay.classList.remove('open');
       renderAll();
