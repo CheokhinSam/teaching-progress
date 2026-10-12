@@ -1122,6 +1122,50 @@
   }
 
   // ============ API: GIST ============
+
+  // 所有 GitHub API 呼叫都要有時限。
+  //
+  // 冇時限的話，一次永遠唔返嘅請求（iOS 把分頁凍結、網絡中途消失）會令
+  // apiSaveProgress 永遠去唔到 finally，state.saveInFlight 就一直係 true。
+  // 之後每一次存檔都靜靜咁行 early return —— saveProgressNow 收到 undefined，
+  // 所以連「同步失敗」都唔會彈，老師見到嘅只係「連續改幾格之後突然存唔到」，
+  // 而且只有重刷（整個 state 重新建）才返得嚟。
+  //
+  // 時限一定要包到讀 body：fetch() 一收到標頭就 resolve，真正嘅資料係
+  // res.json() 嗰下才落嚟，而連線斷得最常見嘅位就係讀到一半。只包 fetch
+  // 等於冇包。
+  //
+  // 逾時唔帶 status，所以 isRetryable 當佢係普通網絡錯誤 —— 會排隊重試，
+  // 唔會靜靜死掉。
+  const API_TIMEOUT_MS = 20000;
+
+  function apiFetch(url, opts = {}) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
+    const done = () => clearTimeout(timer);   // 重複叫冇所謂
+    const failed = e => {
+      done();
+      if (!ctl.signal.aborted) throw e;
+      const err = new Error(`連線逾時（${API_TIMEOUT_MS / 1000} 秒內冇回應）`);
+      err.timeout = true;
+      throw err;
+    };
+    return fetch(url, { ...opts, signal: ctl.signal }).then(
+      res => {
+        // 唔 ok 嘅呼叫端一律即刻 throw、唔會讀 body，唔使留住個計時器等。
+        // （ok 但唔讀 body 嘅只有 apiVerifyToken，佢自己叫 done()。）
+        if (!res.ok) done();
+        return {
+          ok: res.ok,
+          status: res.status,
+          done,
+          async json() { try { return await res.json(); } finally { done(); } }
+        };
+      },
+      failed
+    );
+  }
+
   function headers() {
     return {
       'Authorization': `token ${state.token}`,
@@ -1156,7 +1200,7 @@
 
   async function apiLoadPlan() {
     if (!state.planGistId) throw new Error('缺少 plan Gist ID');
-    const res = await fetch(`${GIST_API}/${state.planGistId}`, { headers: headers() });
+    const res = await apiFetch(`${GIST_API}/${state.planGistId}`, { headers: headers() });
     if (!res.ok) throw new Error(`載入 plan 失敗: ${res.status}`);
     const gist = await res.json();
     const file = pickGistFile(gist, 'plan.json');
@@ -1170,7 +1214,7 @@
   // 之前是 catch 起來塞一份空的，等於一次網路抖動就把進度清光。
   async function apiLoadProgress() {
     if (!state.progressGistId) return initEmptyProgress();
-    const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
+    const res = await apiFetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
     if (!res.ok) throw new Error(`載入進度失敗: ${res.status}`);
     const gist = await res.json();
     const file = pickGistFile(gist, 'progress.json');
@@ -1334,7 +1378,7 @@
 
       const content = JSON.stringify(outgoing, null, 2);
       if (!state.progressGistId) {
-        const res = await fetch(GIST_API, {
+        const res = await apiFetch(GIST_API, {
           method: 'POST', headers: headers(),
           body: JSON.stringify({
             description: 'Data (Private)',
@@ -1347,7 +1391,7 @@
         state.progressGistId = gist.id;
         lsSet(LS_KEYS.progressGistId, gist.id);
       } else {
-        const res = await fetch(`${GIST_API}/${state.progressGistId}`, {
+        const res = await apiFetch(`${GIST_API}/${state.progressGistId}`, {
           method: 'PATCH', headers: headers(),
           body: JSON.stringify({ files: { 'progress.json': { content } } })
         });
@@ -1521,7 +1565,7 @@
   // 讀不到就丟錯，絕對不要回傳 null —— 呼叫端會把 null 當成「遠端沒有東西」
   // 而直接覆蓋，保險機制就在最需要它的時候剛好失效。
   async function fetchRemoteProgressStrict() {
-    const res = await fetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
+    const res = await apiFetch(`${GIST_API}/${state.progressGistId}`, { headers: headers() });
     if (!res.ok) throw httpError(res.status, '讀取遠端進度失敗');
     const gist = await res.json();
     const file = pickGistFile(gist, 'progress.json');
@@ -1530,14 +1574,15 @@
   }
 
   async function apiVerifyToken(token) {
-    const res = await fetch('https://api.github.com/user', {
+    const res = await apiFetch('https://api.github.com/user', {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
+    res.done();   // 只讀 res.ok，冇讀 body，自己收返個計時器
     return res.ok;
   }
 
   async function apiCreatePlanGist(planData) {
-    const res = await fetch(GIST_API, {
+    const res = await apiFetch(GIST_API, {
       method: 'POST', headers: headers(),
       body: JSON.stringify({
         description: 'Teaching Plan Data (Private)',
