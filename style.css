@@ -1112,6 +1112,112 @@ textarea { resize: vertical; min-height: 80px; }
 .empty-state p { font-size: 14px; }
 .empty-state .btn { margin-top: 20px; }
 
+/* ========= PRINT RECORDS =========
+   每一筆就是一行：內容與金額同一行（眼睛先看這兩個），日期／班／份數／
+   黑白彩色做細字。金額用 tabular-nums，直排對得齊，掃一眼就知有沒有
+   打錯一位。 */
+.print-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.print-filter {
+  padding: 7px 10px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  background: white;
+  font-size: 14px;
+  color: var(--gray-700);
+  font-family: inherit;
+}
+
+.print-summary {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin-bottom: 12px;
+}
+.print-summary b { color: var(--gray-800); }
+
+.print-list { display: flex; flex-direction: column; gap: 8px; }
+
+.print-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: var(--transition);
+}
+.print-row:hover { border-color: var(--gray-300); background: var(--gray-50); }
+
+.print-row-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  margin-top: 7px;
+}
+
+.print-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.print-row-top { display: flex; justify-content: space-between; gap: 12px; }
+
+.print-row-content {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--gray-800);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.print-row-amount {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--gray-800);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.print-row-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--gray-500);
+  font-variant-numeric: tabular-nums;
+}
+.print-row-class { color: var(--gray-600); font-weight: 600; }
+.print-row-kind.is-color { color: #b45309; font-weight: 600; }
+
+/* 視窗裡數量與頁數並排 —— 它們總是一起填，分兩行只是拉長視窗。 */
+.print-form-row { display: flex; gap: 12px; }
+.print-form-row .form-group { flex: 1; min-width: 0; }
+
+.print-preview {
+  padding: 10px 12px;
+  background: var(--gray-50);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--gray-700);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ========= VISIBILITY ========= */
 .hidden { display: none !important; }
 
@@ -1240,10 +1346,11 @@ textarea { resize: vertical; min-height: 80px; }
   /* 日期可以藏，但未同步指示不行 —— 它是要老師採取行動的 */
   .sync-banner { font-size: 11px; padding: 3px 8px; }
 
-  /* 五個分頁在 358px 裡，字 13px 不改，只把左右內距從 12px 收到 6px：
-     最闊的「今日課堂」4 字 52px + 12px 內距 = 64px，五個平分每格 71px，
-     剛好塞得下。原本 12px 內距是 76px > 71px，最後一個「⚙ 設定」就被切掉。 */
-  .nav-tab { padding: 8px 6px; }
+  /* 六個分頁在 358px 裡平分，每格約 59px（扣掉 gap 之後）。
+     最闊的「今日課堂」4 字：13px 要 52px + 內距，一定爆；
+     12px 是 48px，左右各 4px 內距 = 56px，剛好塞得下。
+     再小就看不清楚了，所以寬度只能從字級和內距擠。 */
+  .nav-tab { font-size: 12px; padding: 8px 4px; }
 
   /* 手機收起週六那一欄。學校週六沒有常規課，留着一欄等於白白收窄其餘
      五天 —— 390px 手機上每格由 69px 掉到 57px，主題由 5 個字變 4 個字。
@@ -1259,4 +1366,10 @@ textarea { resize: vertical; min-height: 80px; }
 
   .lesson-actions { flex-wrap: wrap; }
   .lesson-actions .btn { flex: 1; justify-content: center; }
+
+  /* 手機一行放不下三樣：新增鈕 + 班級篩選 + 單價。
+     單價不是每次都用得到，讓它自己掉到第二行，篩選才有足夠寬度顯示
+     「全部班級」（被截成「全部班」就看不出在篩什麼）。 */
+  .print-toolbar .print-filter { flex: 1; min-width: 0; }
+  .print-toolbar #print-prices { order: 3; flex-basis: 100%; font-weight: 500; }
 }

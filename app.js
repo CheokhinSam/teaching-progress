@@ -57,7 +57,9 @@
     dayOffset: 0,         // 0 = today, -1 = yesterday, 1 = tomorrow
     // 行事曆那個當天小視窗正在看哪一天。用來在資料變動後重畫它 ——
     // 在裡面按「全部完成」或事後按「復原」，清單上的狀態都要跟著更新。
-    dayModalDate: null
+    dayModalDate: null,
+    // 打印記錄畫面的班級篩選。只存活於這個工作階段，不必存起來。
+    printClassFilter: ''
   };
 
   // 班級顏色。正式的一組由 plan.json 的 "class_colors" 提供（{班名: #hex}）——
@@ -867,14 +869,125 @@
     return new Date(new Date(prev).getTime() + 1).toISOString();
   }
 
+  // ============ DATA: 打印記錄 ============
+  //
+  // 老師在學校打印後要記低：印咗乜、印咗幾多、邊個班。這些記錄跟課節無關，
+  // 所以放在進度文件的頂層 printing（跟 classes 平級），不塞進每一班裡面 ——
+  // 塞進去會被「課堂每次都由 plan 重建」那套邏輯牽連，而且班名要跟 plan 對得上。
+  //
+  // 跨裝置合併跟逐節紀錄一樣：每筆有穩定 id 和 updated_at，逐筆比新舊；
+  // 刪除寫墓碑（removed），否則另一台裝置下一次存檔就會把它加回來。
+  //
+  // 單價記在每一筆上面（rate），不是每次用當前價格重算：簿記講的是「當時
+  // 實際用了多少錢」，之後改價格不應該回頭改寫舊記錄。
+
+  const DEFAULT_PRINT_PRICES = { bw: 0.12, color: 1.8 };
+
+  function printData() {
+    const p = state.progress?.printing;
+    return p && typeof p === 'object' ? p : {};
+  }
+
+  function printPrices() {
+    const p = printData().prices || {};
+    const num = (v, d) => (typeof v === 'number' && isFinite(v) && v >= 0 ? v : d);
+    return {
+      bw: num(p.bw, DEFAULT_PRINT_PRICES.bw),
+      color: num(p.color, DEFAULT_PRINT_PRICES.color)
+    };
+  }
+
+  function printRate(rec) {
+    const r = rec?.rate;
+    if (typeof r === 'number' && isFinite(r) && r >= 0) return r;
+    return rec?.color ? printPrices().color : printPrices().bw;
+  }
+
+  function printSubtotal(rec) {
+    return (Number(rec?.copies) || 0) * (Number(rec?.pages) || 0) * printRate(rec);
+  }
+
+  // 墓碑的形狀跟 mergeOverlay 一樣：{removed:bool, at}，也接受舊式的 true。
+  function printRemoved(removed, id) {
+    const e = removed?.[id];
+    if (e === true) return true;
+    return !!(e && typeof e === 'object' && e.removed);
+  }
+
+  function printRecords() {
+    const p = printData();
+    const arr = Array.isArray(p.records) ? p.records : [];
+    const removed = p.removed && typeof p.removed === 'object' ? p.removed : {};
+    return arr
+      .filter(r => r && r.id && !printRemoved(removed, r.id))
+      .slice()
+      // 日期新的排前面；同一天的話，後加的排前面 —— id 用時間起頭，
+      // 剛存的那筆一定在當天最上面，老師立刻看得見（否則同一天記了
+      // 好幾筆時，新記錄會沉到當天那組的最底，好似冇存到）。
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return a.id < b.id ? 1 : -1;
+      });
+  }
+
+  function printRecordId() {
+    return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function ensurePrinting() {
+    if (!state.progress) initEmptyProgress();
+    const p = state.progress.printing;
+    if (!p || typeof p !== 'object') state.progress.printing = { records: [], removed: {}, prices: {} };
+    if (!Array.isArray(state.progress.printing.records)) state.progress.printing.records = [];
+    if (!state.progress.printing.removed || typeof state.progress.printing.removed !== 'object') {
+      state.progress.printing.removed = {};
+    }
+    return state.progress.printing;
+  }
+
+  // 兩台裝置各自離線加記錄時，id 不可能撞（時間 + 隨機）。所以合併是
+  // 按 id 取聯集，同 id 比 updated_at。墓碑逐鍵比 at，平手時本機勝 ——
+  // 跟 mergeOverlay 的規則一致，這樣「按了刪除」不會在另一台還原之前復活。
+  function mergePrinting(local, remote) {
+    const lrec = Array.isArray(local?.records) ? local.records : [];
+    const rrec = Array.isArray(remote?.records) ? remote.records : [];
+    const byId = new Map();
+    for (const r of [...rrec, ...lrec]) {
+      if (!r || !r.id) continue;
+      const cur = byId.get(r.id);
+      if (!cur || (r.updated_at || '') > (cur.updated_at || '')) byId.set(r.id, r);
+    }
+
+    const norm = e => e === true ? { removed: true, at: '' }
+      : (e && typeof e === 'object') ? { removed: !!e.removed, at: e.at || '' } : null;
+    const lr = (local?.removed && typeof local.removed === 'object') ? local.removed : {};
+    const rr = (remote?.removed && typeof remote.removed === 'object') ? remote.removed : {};
+    const removed = {};
+    for (const k of new Set([...Object.keys(rr), ...Object.keys(lr)])) {
+      const a = norm(rr[k]), b = norm(lr[k]);
+      const win = !a ? b : !b ? a : (b.at >= a.at ? b : a);
+      if (win) removed[k] = win;
+    }
+
+    // 價格是純量，只能整組比時間戳（同 shift_count 的處理）。
+    const lp = local?.prices, rp = remote?.prices;
+    const prices = !lp ? rp : !rp ? lp : ((lp.at || '') >= (rp.at || '') ? lp : rp);
+
+    const out = { records: [...byId.values()].filter(r => !printRemoved(removed, r.id)) };
+    if (Object.keys(removed).length) out.removed = removed;
+    if (prices) out.prices = prices;
+    return out;
+  }
+
   function buildProgressData() {
     const progress = { _meta: { ...(state.progress?._meta || {}) }, classes: {} };
     progress._meta.version = '1.0';
     // schema 2 = 逐節紀錄多了 seq（同一天的第幾節），合併的鍵從 lesson 名次改成
     // 「日期＋seq」。舊版 app 仍用名次當鍵，兩版同時寫會撞號，所以存檔時要提醒。
     // schema 3 = 每個班每個學期多了 extras（手動加的節）與 removed（刪除的墓碑）。
+    // schema 4 = 頂層多了 printing（打印記錄）。
     // 舊版 app 不認得這兩個欄位，存一次檔就會把它們洗掉，所以存檔前要提醒。
-    progress._meta.schema = 3;
+    progress._meta.schema = 4;
     progress._meta.last_modified = stampNow();
     const now = progress._meta.last_modified;
 
@@ -952,6 +1065,12 @@
     // 「合併加回來、下次存檔又刪掉」的無限循環。
     for (const [cls, data] of Object.entries(state.progress?.classes || {})) {
       if (!progress.classes[cls]) progress.classes[cls] = data;
+    }
+
+    // 打印記錄原樣帶過去。少了這一段，每次存檔（包括存一節課）都會把整份
+    // 打印記錄洗掉 —— 它跟課節完全無關，不該被課節的存檔路徑連累。
+    if (state.progress?.printing && typeof state.progress.printing === 'object') {
+      progress.printing = state.progress.printing;
     }
 
     return progress;
@@ -1057,6 +1176,12 @@
     let lostLocal = 0, lostRemote = 0;
     const merged = { _meta: { ...(local._meta || {}) }, classes: {} };
     merged._meta.last_modified = localStamp;   // 已經是剛蓋好的新時間戳
+
+    // 打印記錄跟課節是兩套獨立的資料，各自合併。一台裝置加了一筆打印記錄、
+    // 另一台勾了一節課，兩者根本不衝突 —— 不該叫老師二選一。
+    if (local.printing || remote.printing) {
+      merged.printing = mergePrinting(local.printing, remote.printing);
+    }
 
     const classes = new Set([...Object.keys(local.classes || {}), ...Object.keys(remote.classes || {})]);
     for (const cls of classes) {
@@ -1333,14 +1458,14 @@
       let outgoing = data;
       if (!force && !readErr && remote?._meta?.last_modified) {
         // 雲端的 schema 比這個版本舊 = 上一次寫它的是舊版 app：它不認得
-        // extras／removed，存一次檔就會把老師手動加的節和刪除紀錄洗掉。
-        // 先把遠端整份留一份底。不擋存檔 —— 讓老師的編輯卡在離線，比偶爾
-        // 多一份快照糟得多。每台裝置每次開啟只吵一次。
+        // extras／removed／printing，存一次檔就會把老師手動加的節、刪除紀錄
+        // 和打印記錄洗掉。先把遠端整份留一份底。不擋存檔 —— 讓老師的編輯
+        // 卡在離線，比偶爾多一份快照糟得多。每台裝置每次開啟只吵一次。
         const remoteSchema = Number(remote._meta.schema || 1);
-        if (remoteSchema < 3 && !state.warnedOldSchema) {
+        if (remoteSchema < 4 && !state.warnedOldSchema) {
           state.warnedOldSchema = true;
           takeSnapshot('雲端進度是舊版 app 寫的（尚未升級）', remote, true);
-          toast('有一台裝置的 app 還是舊版，已先備份雲端進度 —— 手動加的節和刪除紀錄可能被它蓋掉', 'warning');
+          toast('有一台裝置的 app 還是舊版，已先備份雲端進度 —— 手動加的節、刪除紀錄和打印記錄可能被它蓋掉', 'warning');
         }
         // 遠端有別台裝置寫過的東西 → 逐節合併，不再叫老師二選一。
         // 這裡不比對 last_modified 是否相等：buildProgressData() 每次都蓋新時間戳，
@@ -1667,6 +1792,7 @@
       case 'week': renderWeek(); break;
       case 'compare': renderCompare(); break;
       case 'calendar': renderCalendar(); break;
+      case 'printing': renderPrinting(); break;
       case 'settings': renderSettings(); break;
     }
   }
@@ -2310,6 +2436,248 @@
       }
     }
     return '';
+  }
+
+  // ============ UI: 打印記錄 ============
+  //
+  // 一頁看清「印咗乜、幾多份、邊個班、幾多錢」。列表按日期新到舊排，
+  // 上面可以篩班級；點任何一筆就開修改視窗（刪除也在裡面）。
+
+  const printMoney = n => '$' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+  const printDateLabel = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? fmtDisplay(d) : (d || '');
+
+  // 班級清單：plan 有的班 + 記錄裡出現過的班。後者是必要的 —— 換過 plan
+  // 或者記錄是從舊資料帶進來的，那些班名仍然要看得到、改得到。
+  function printClassList() {
+    return [...new Set([
+      ...Object.keys(state.plan?.schedule || {}),
+      ...printRecords().map(r => r.class).filter(Boolean)
+    ])];
+  }
+
+  function renderPrinting() {
+    const container = $('printing-content');
+    if (!container) return;
+    const all = printRecords();
+    const prices = printPrices();
+    const filter = state.printClassFilter || '';
+    const rows = filter ? all.filter(r => r.class === filter) : all;
+    const total = rows.reduce((s, r) => s + printSubtotal(r), 0);
+
+    const rowsHtml = rows.length ? rows.map(r => `
+      <button type="button" class="print-row" data-id="${escHtml(r.id)}">
+        <span class="print-row-dot" style="background:${classColor(r.class)}"></span>
+        <span class="print-row-main">
+          <span class="print-row-top">
+            <span class="print-row-content">${escHtml(r.content || '（未填內容）')}</span>
+            <span class="print-row-amount">${printMoney(printSubtotal(r))}</span>
+          </span>
+          <span class="print-row-meta">
+            <span>${escHtml(printDateLabel(r.date))}</span>
+            <span class="print-row-class">${escHtml(r.class || '')}</span>
+            <span>${Number(r.copies) || 0} 份 × ${Number(r.pages) || 0} 頁</span>
+            <span class="print-row-kind${r.color ? ' is-color' : ''}">${r.color ? '彩色' : '黑白'}</span>
+          </span>
+        </span>
+      </button>`).join('')
+      : `<div class="empty-state">
+           <div class="icon">🖨</div>
+           <h3>仲未有打印記錄</h3>
+           <p>印完之後撳「＋ 新增記錄」，記低印咗乜、幾多份、邊個班。</p>
+         </div>`;
+
+    container.innerHTML = `
+      <div class="print-toolbar">
+        <button class="btn btn-primary btn-sm" id="print-add">＋ 新增記錄</button>
+        <select id="print-filter" class="print-filter">
+          <option value="">全部班級</option>
+          ${printClassList().map(c => `<option value="${escHtml(c)}"${c === filter ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+        </select>
+        <button class="btn btn-outline btn-sm" id="print-prices"
+                title="修改單價">黑白 ${printMoney(prices.bw)} · 彩色 ${printMoney(prices.color)}／頁</button>
+      </div>
+      <div class="print-summary">
+        <span><b>${rows.length}</b> 筆</span>
+        <span class="stats-sep">·</span>
+        <span>合計 <b>${printMoney(total)}</b></span>
+        ${filter ? `<span class="stats-sep">·</span><span>${escHtml(filter)}</span>` : ''}
+      </div>
+      <div class="print-list">${rowsHtml}</div>`;
+
+    $('print-add').onclick = () => openPrintRecordModal();
+    $('print-prices').onclick = () => openPrintPricesModal();
+    $('print-filter').onchange = e => {
+      state.printClassFilter = e.target.value;
+      renderPrinting();
+    };
+    container.querySelectorAll('.print-row').forEach(el => {
+      el.addEventListener('click', () => openPrintRecordModal(el.dataset.id));
+    });
+  }
+
+  function openPrintRecordModal(id) {
+    state.dayModalDate = null;   // 換視窗了，別再被當天清單蓋回來
+    const overlay = $('modal-overlay');
+    const editing = id ? printRecords().find(r => r.id === id) : null;
+    const prices = printPrices();
+    const classes = printClassList();
+
+    const only = state.selectedClasses.size === 1 ? [...state.selectedClasses][0] : null;
+    const cls0 = (editing && classes.includes(editing.class)) ? editing.class
+      : (only && classes.includes(only)) ? only : (classes[0] || '');
+
+    // 數量預設帶該班上一筆的份數 —— 同一班的人數整年不變，每次重打很煩。
+    const lastOfClass = printRecords().find(r => r.class === cls0);
+    const copies0 = editing ? (Number(editing.copies) || 0)
+      : (lastOfClass ? (Number(lastOfClass.copies) || 1) : 1);
+    const pages0 = editing ? (Number(editing.pages) || 0) : 1;
+    const color0 = !!editing?.color;
+    const date0 = (editing && /^\d{4}-\d{2}-\d{2}$/.test(editing.date || '')) ? editing.date : fmtDate(today());
+
+    $('modal-title').textContent = editing ? '修改打印記錄' : '新增打印記錄';
+    $('modal-body').innerHTML = `
+      <div class="form-group">
+        <label>日期</label>
+        <input type="date" id="print-date" value="${date0}">
+      </div>
+      <div class="form-group">
+        <label>班級</label>
+        <select id="print-class">
+          ${classes.map(c => `<option value="${escHtml(c)}"${c === cls0 ? ' selected' : ''}>${escHtml(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>內容</label>
+        <input type="text" id="print-content" value="${escHtml(editing?.content || '')}" placeholder="例：工作紙一">
+      </div>
+      <div class="print-form-row">
+        <div class="form-group">
+          <label>數量（份）</label>
+          <input type="number" id="print-copies" min="0" step="1" value="${copies0}">
+        </div>
+        <div class="form-group">
+          <label>頁數</label>
+          <input type="number" id="print-pages" min="0" step="1" value="${pages0}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>種類</label>
+        <select id="print-color">
+          <option value="0"${color0 ? '' : ' selected'}>黑白</option>
+          <option value="1"${color0 ? ' selected' : ''}>彩色</option>
+        </select>
+      </div>
+      <div class="print-preview" id="print-preview"></div>`;
+
+    $('modal-footer').innerHTML = `
+      ${editing ? '<button class="btn btn-danger" id="print-delete" style="margin-right:auto">🗑 刪除</button>' : ''}
+      <button class="btn btn-outline" id="print-cancel">取消</button>
+      <button class="btn btn-primary" id="print-save">${editing ? '儲存' : '＋ 加入'}</button>`;
+    overlay.classList.add('open');
+
+    // 邊打邊顯示小計 —— 數量／頁數打錯一位，這裡立刻看得出來，
+    // 不必等存檔之後再逐筆核對。
+    const paintPreview = () => {
+      const copies = Number($('print-copies').value) || 0;
+      const pages = Number($('print-pages').value) || 0;
+      const rate = $('print-color').value === '1' ? prices.color : prices.bw;
+      $('print-preview').textContent =
+        `${copies} 份 × ${pages} 頁 × ${printMoney(rate)}／頁 = ${printMoney(copies * pages * rate)}`;
+    };
+    ['print-copies', 'print-pages', 'print-color'].forEach(id => {
+      $(id).addEventListener('input', paintPreview);
+      $(id).addEventListener('change', paintPreview);
+    });
+    paintPreview();
+
+    const close = () => overlay.classList.remove('open');
+    $('print-cancel').onclick = close;
+
+    $('print-save').onclick = () => {
+      const date = $('print-date').value;
+      const className = $('print-class').value;
+      const content = $('print-content').value.trim();
+      const copies = Number($('print-copies').value);
+      const pages = Number($('print-pages').value);
+      const color = $('print-color').value === '1';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('請揀一個日期', 'error'); return; }
+      if (!className) { toast('請揀一個班級', 'error'); return; }
+      if (!content) { toast('請填打印內容', 'error'); return; }
+      if (!(copies >= 0) || !(pages >= 0)) { toast('數量和頁數要是 0 或以上', 'error'); return; }
+
+      const p = ensurePrinting();
+      const rec = {
+        id: editing ? editing.id : printRecordId(),
+        date, class: className, content, copies, pages, color,
+        rate: color ? prices.color : prices.bw,
+        updated_at: new Date().toISOString()
+      };
+      const i = p.records.findIndex(r => r.id === rec.id);
+      if (i >= 0) p.records[i] = rec; else p.records.push(rec);
+      markDirty();
+      close();
+      renderPrinting();
+      toast(editing ? '已更新打印記錄' : `＋ 已記錄：${content}（${copies} 份）`, 'success');
+    };
+
+    if (editing) {
+      $('print-delete').onclick = () => {
+        if (!confirm('確定刪除這筆打印記錄？')) return;
+        ensurePrinting().removed[editing.id] = { removed: true, at: new Date().toISOString() };
+        markDirty();
+        close();
+        renderPrinting();
+        // 復原用 id 重新找資料，不要用 closure 裡的物件 —— 存檔成功之後
+        // state.progress 會被整份換掉，舊物件的改動不會送到雲端。
+        toast(`🗑 已刪除：${editing.content || '打印記錄'}`, 'info', {
+          label: '復原',
+          onClick: () => {
+            ensurePrinting().removed[editing.id] = { removed: false, at: new Date().toISOString() };
+            markDirty();
+            renderPrinting();
+            toast('已復原', 'success');
+          }
+        });
+      };
+    }
+
+    $('print-content').focus();
+  }
+
+  function openPrintPricesModal() {
+    state.dayModalDate = null;
+    const overlay = $('modal-overlay');
+    const prices = printPrices();
+    $('modal-title').textContent = '打印單價';
+    $('modal-body').innerHTML = `
+      <div class="print-form-row">
+        <div class="form-group">
+          <label>黑白（每頁）</label>
+          <input type="number" id="price-bw" min="0" step="0.01" value="${prices.bw}">
+        </div>
+        <div class="form-group">
+          <label>彩色（每頁）</label>
+          <input type="number" id="price-color" min="0" step="0.01" value="${prices.color}">
+        </div>
+      </div>
+      <div class="hint">只影響之後新增的記錄。舊記錄保留當時的單價，不會被改寫。</div>`;
+    $('modal-footer').innerHTML = `
+      <button class="btn btn-outline" id="price-cancel">取消</button>
+      <button class="btn btn-primary" id="price-save">儲存</button>`;
+    overlay.classList.add('open');
+
+    $('price-cancel').onclick = () => overlay.classList.remove('open');
+    $('price-save').onclick = () => {
+      const bw = Number($('price-bw').value);
+      const color = Number($('price-color').value);
+      if (!(bw >= 0) || !(color >= 0)) { toast('單價要是 0 或以上', 'error'); return; }
+      const p = ensurePrinting();
+      p.prices = { bw, color, at: new Date().toISOString() };
+      markDirty();
+      overlay.classList.remove('open');
+      renderPrinting();
+      toast('已更新單價', 'success');
+    };
   }
 
   // ============ UI: SETTINGS VIEW ============
