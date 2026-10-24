@@ -3206,8 +3206,15 @@
       <button class="btn btn-primary" id="modal-save">儲存</button>`;
     overlay.classList.add('open');
 
+    // 這個視窗開著的時候，上一次的存檔可能剛好完成，而存檔成功會整批重建
+    // state.lessons（見 generateLessonSlots）。重建之後手上的 l 已經不在
+    // state 裡面 —— 再改它，畫面同雲端都收唔到，老師見到的就係「按了儲存
+    // 仍然係之前的內容」。所以每次寫入前都用 id 重新搵返最新嗰個。
+    const current = () => findLesson(l.id);
+
     $('modal-delete').onclick = () => {
-      const when = `${fmtDisplay(l.date)} ${classPeriod(l)}`;
+      const target = current() || l;
+      const when = `${fmtDisplay(target.date)} ${classPeriod(target)}`;
       if (!confirm(`刪除 ${when} 這一節？\n\n其他節的教學內容不會往前補，就只是少了這一節。\n（刪除後 8 秒內可以按「復原」）`)) return;
       overlay.classList.remove('open');
       deleteLesson(l.id);
@@ -3217,26 +3224,37 @@
     // 課後備註是下課後才寫的，老師很自然係寫完就撳「✓ 標記完成」（那正是他這節
     // 做完的動作）。原本那顆掣只反轉 done、不讀表單，寫好的備註就隨住視窗關閉
     // 一齊消失，而且完全沒有提示。
-    const applyForm = () => {
-      l.topic = $('modal-topic').value.trim() || l.topic;
-      l.note = $('modal-note').value.trim();
+    const applyForm = target => {
+      target.topic = $('modal-topic').value.trim() || target.topic;
+      target.note = $('modal-note').value.trim();
       const hwTopic = $('modal-hw-topic').value.trim();
       const hwDue = $('modal-hw-due').value;
-      l.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
+      target.hw = hwTopic ? { topic: hwTopic, due: hwDue } : null;
+    };
+
+    // 每一節都只會喺呢個視窗入面消失：被另一台裝置刪掉。與其靜靜寫入
+    // 一份孤兒物件，不如講清楚。
+    const goneNotice = () => {
+      overlay.classList.remove('open');
+      toast('這一節已經不存在（可能在另一台裝置被刪除）', 'warning');
     };
 
     $('modal-toggle-done').onclick = () => {
-      applyForm();
-      l.done = !l.done;
-      markLessonDirty(l.id);
+      const target = current();
+      if (!target) { goneNotice(); return; }
+      applyForm(target);
+      target.done = !target.done;
+      markLessonDirty(target.id);
       overlay.classList.remove('open');
       renderAll();
-      toast(l.done ? '✅ 已完成' : '已取消完成', l.done ? 'success' : 'info');
+      toast(target.done ? '✅ 已完成' : '已取消完成', target.done ? 'success' : 'info');
     };
 
     $('modal-save').onclick = () => {
-      applyForm();
-      markLessonDirty(l.id);
+      const target = current();
+      if (!target) { goneNotice(); return; }
+      applyForm(target);
+      markLessonDirty(target.id);
       overlay.classList.remove('open');
       renderAll();
       toast('已儲存', 'success');
@@ -3372,11 +3390,18 @@
     overlay.classList.add('open');
 
     $('modal-save-hw').onclick = () => {
+      // 同 openLessonModal：存檔完成會重建課堂，手上的 l 可能已經係孤兒。
+      const target = findLesson(l.id);
+      if (!target) {
+        overlay.classList.remove('open');
+        toast('這一節已經不存在（可能在另一台裝置被刪除）', 'warning');
+        return;
+      }
       const topic = $('hw-topic').value.trim();
       const due = $('hw-due').value;
       const note = $('hw-note').value.trim();
-      l.hw = topic ? { topic, due, note } : null;
-      markLessonDirty(l.id);
+      target.hw = topic ? { topic, due, note } : null;
+      markLessonDirty(target.id);
       overlay.classList.remove('open');
       renderCurrentView();
       toast('作業已更新', 'success');
@@ -3689,8 +3714,18 @@
 
     // Bind modal close
     $('modal-close')?.addEventListener('click', () => $('modal-overlay')?.classList.remove('open'));
+    // 撳背景關窗，只計「由背景撳落去」那一下。老師在備註欄 highlight 文字、
+    // 拖到視窗外面才放手時，mouseup 落在背景上，click 的 target 會變成
+    // overlay —— 舊寫法會當成撳背景，一放手就連未儲存的內容一齊關掉。
+    let overlayPressed = false;
+    $('modal-overlay')?.addEventListener('pointerdown', e => {
+      overlayPressed = e.target === e.currentTarget;
+    });
     $('modal-overlay')?.addEventListener('click', e => {
-      if (e.target === e.currentTarget) e.currentTarget.classList.remove('open');
+      if (e.target !== e.currentTarget) { overlayPressed = false; return; }
+      if (!overlayPressed) return;   // 由視窗內撳落去、拖出去放手：唔算
+      overlayPressed = false;
+      e.currentTarget.classList.remove('open');
     });
 
     // Bind auto-sync on visibility change
