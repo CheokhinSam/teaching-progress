@@ -2444,7 +2444,15 @@
   // 上面可以篩班級；點任何一筆就開修改視窗（刪除也在裡面）。
 
   const printMoney = n => '$' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
-  const printDateLabel = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? fmtDisplay(d) : (d || '');
+  // 舊記錄匯入時冇日期，照實留空顯示「—」，不要拿今日頂上。
+  const printDateLabel = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? fmtDisplay(d) : (d || '—');
+
+  // 班級人數由 plan 提供（schedule.<班>.class_size）。刻意不寫死在原始碼：
+  // repo 是公開的，班名與人數都是老師自己的資料。
+  function classSize(cls) {
+    const n = state.plan?.schedule?.[cls]?.class_size;
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
 
   // 班級清單：plan 有的班 + 記錄裡出現過的班。後者是必要的 —— 換過 plan
   // 或者記錄是從舊資料帶進來的，那些班名仍然要看得到、改得到。
@@ -2526,13 +2534,15 @@
     const cls0 = (editing && classes.includes(editing.class)) ? editing.class
       : (only && classes.includes(only)) ? only : (classes[0] || '');
 
-    // 數量預設帶該班上一筆的份數 —— 同一班的人數整年不變，每次重打很煩。
+    // 數量預設帶該班人數（plan 的 class_size）；plan 冇寫的班（例如課後班）
+    // 才退回該班上一筆的份數。修改舊記錄時一律保留當時實際印了幾多。
     const lastOfClass = printRecords().find(r => r.class === cls0);
     const copies0 = editing ? (Number(editing.copies) || 0)
-      : (lastOfClass ? (Number(lastOfClass.copies) || 1) : 1);
+      : (classSize(cls0) || (lastOfClass ? (Number(lastOfClass.copies) || 1) : 1));
     const pages0 = editing ? (Number(editing.pages) || 0) : 1;
     const color0 = !!editing?.color;
-    const date0 = (editing && /^\d{4}-\d{2}-\d{2}$/.test(editing.date || '')) ? editing.date : fmtDate(today());
+    // 舊記錄本來就冇日期：保留空白，不要一打開就偷偷變成今日。
+    const date0 = editing ? (editing.date || '') : fmtDate(today());
 
     $('modal-title').textContent = editing ? '修改打印記錄' : '新增打印記錄';
     $('modal-body').innerHTML = `
@@ -2588,6 +2598,15 @@
       $(id).addEventListener('input', paintPreview);
       $(id).addEventListener('change', paintPreview);
     });
+    // 揀邊班，數量就跟該班人數。手動改過都照老師輸入，只有「轉班」才重設 ——
+    // 原班嘅份數對新班冇意義。
+    $('print-class').addEventListener('change', e => {
+      const size = classSize(e.target.value);
+      if (size) {
+        $('print-copies').value = size;
+        paintPreview();
+      }
+    });
     paintPreview();
 
     const close = () => overlay.classList.remove('open');
@@ -2600,7 +2619,11 @@
       const copies = Number($('print-copies').value);
       const pages = Number($('print-pages').value);
       const color = $('print-color').value === '1';
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('請揀一個日期', 'error'); return; }
+      // 匯入的舊記錄本來就冇日期，改內容時不逼老師補一個假日期；
+      // 新記錄仍然一定要有日期。
+      const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(date);
+      const keepUndated = editing && !editing.date && !date;
+      if (!dateOk && !keepUndated) { toast('請揀一個日期', 'error'); return; }
       if (!className) { toast('請揀一個班級', 'error'); return; }
       if (!content) { toast('請填打印內容', 'error'); return; }
       if (!(copies >= 0) || !(pages >= 0)) { toast('數量和頁數要是 0 或以上', 'error'); return; }
